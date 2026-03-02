@@ -32,7 +32,8 @@ public class SecurityConfig {
                         sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**", "/ws/**", "/agents/login", "/agents/register").permitAll()
-                        .requestMatchers("/agents/heartbeat", "/agents/offline","/agents/metrics").hasRole("AGENT")
+                        .requestMatchers("/agents/heartbeat", "/agents/offline", "/agents/metrics").hasRole("AGENT")
+                        .requestMatchers("/sessions/pending/**").hasRole("AGENT")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);

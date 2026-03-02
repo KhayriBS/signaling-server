@@ -10,6 +10,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Optional;
 
 @Service
 public class SessionService {
@@ -64,4 +65,13 @@ public class SessionService {
                     agentRepository.save(agent);
                 });
     }
-}
+    /**
+     * Récupère la session active pour un agent donné.
+     * Utilisé par l'agent pour savoir s'il doit rejoindre une session de signaling.
+     */
+    public Optional<ControlSession> getActiveSessionForAgent(String machineId) {
+        return sessionRepository.findByAgentMachineIdAndStatus(
+                machineId,
+                SessionStatus.ACTIVE
+        );
+    }}
