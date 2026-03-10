@@ -78,6 +78,9 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
                 role,
                 session
         );
+
+        // Stocker le sessionId dans les attributs de la session WebSocket
+        session.getAttributes().put("sessionId", String.valueOf(controlSession.getId()));
     }
 
     @Override
@@ -91,7 +94,8 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        String sessionId = getQueryParam(session, "sessionId");
+        // Récupérer sessionId depuis les attributs (stocké à la connexion)
+        String sessionId = (String) session.getAttributes().get("sessionId");
         if (sessionId == null) {
             session.sendMessage(new TextMessage(error("Missing sessionId")));
             return;
@@ -109,7 +113,7 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        String sessionId = getQueryParam(session, "sessionId");
+        String sessionId = (String) session.getAttributes().get("sessionId");
         if (sessionId != null) {
             signalingService.remove(sessionId, session);
         }
