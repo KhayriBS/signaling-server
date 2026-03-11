@@ -6,6 +6,9 @@ import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentMetrics
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.stream.Collectors;
+
 @Service
 
 public class AgentMetricsService {
@@ -30,5 +33,19 @@ public class AgentMetricsService {
         m.setCreatedAt(ts);
 
         repo.save(m);
+    }
+
+    public List<AgentMetricsDto> getMetricsHistory(String machineId) {
+        return repo.findTop50ByMachineIdOrderByCreatedAtDesc(machineId)
+                .stream()
+                .map(m -> {
+                    AgentMetricsDto dto = new AgentMetricsDto();
+                    dto.setCpuUsage(m.getCpuUsage());
+                    dto.setRamUsage(m.getRamUsage());
+                    dto.setDiskUsage(m.getDiskUsage());
+                    dto.setTimestamp(m.getCreatedAt().toEpochMilli());
+                    return dto;
+                })
+                .collect(Collectors.toList());
     }
 }

@@ -66,4 +66,9 @@ public class AgentController {
                         " disk=" + dto.getDiskUsage()
         );
     }
+
+    @GetMapping("/metrics/{machineId}")
+    public List<AgentMetricsDto> getMetrics(@PathVariable String machineId) {
+        return agentMetricsService.getMetricsHistory(machineId);
+    }
 }
