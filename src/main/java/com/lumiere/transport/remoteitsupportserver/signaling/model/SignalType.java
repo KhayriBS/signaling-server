@@ -6,5 +6,6 @@ public enum SignalType {
     ANSWER,       // SDP answer
     ICE,          // ICE candidate
     LEAVE,        // quitter session
+    CHAT,         // chat message
     ERROR
 }
