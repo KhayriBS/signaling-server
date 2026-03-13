@@ -19,6 +19,12 @@ public class ChatMessage {
     @Column(nullable = false)
     private String senderName;
 
+    @Column
+    private String receiverRole;
+
+    @Column
+    private String receiverName;
+
     @Column(nullable = false, length = 2000)
     private String content;
 
@@ -40,6 +46,16 @@ public class ChatMessage {
         this.timestamp = LocalDateTime.now();
     }
 
+    public ChatMessage(Long sessionId, String senderRole, String senderName, String receiverRole, String receiverName, String content) {
+        this.sessionId = sessionId;
+        this.senderRole = senderRole;
+        this.senderName = senderName;
+        this.receiverRole = receiverRole;
+        this.receiverName = receiverName;
+        this.content = content;
+        this.timestamp = LocalDateTime.now();
+    }
+
     // Getters and Setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -52,6 +68,12 @@ public class ChatMessage {
 
     public String getSenderName() { return senderName; }
     public void setSenderName(String senderName) { this.senderName = senderName; }
+
+    public String getReceiverRole() { return receiverRole; }
+    public void setReceiverRole(String receiverRole) { this.receiverRole = receiverRole; }
+
+    public String getReceiverName() { return receiverName; }
+    public void setReceiverName(String receiverName) { this.receiverName = receiverName; }
 
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }

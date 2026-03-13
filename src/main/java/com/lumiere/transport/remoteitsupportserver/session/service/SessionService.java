@@ -6,6 +6,7 @@ import com.lumiere.transport.remoteitsupportserver.session.entity.ControlSession
 import com.lumiere.transport.remoteitsupportserver.session.entity.SessionStatus;
 import com.lumiere.transport.remoteitsupportserver.session.entity.SessionToken;
 import com.lumiere.transport.remoteitsupportserver.session.repository.ControlSessionRepository;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
@@ -26,16 +27,28 @@ public class SessionService {
     public ControlSession startSession(String machineId,
                                        Authentication authentication) {
 
+        var agent = agentRepository.findByMachineId(machineId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + machineId));
+
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+
+        if (!isAdmin) {
+            String assignedUsername = agent.getAssignedUsername();
+            String currentUsername = authentication.getName();
+            if (assignedUsername == null || !assignedUsername.equals(currentUsername)) {
+                throw new AccessDeniedException("Machine is not assigned to current user");
+            }
+        }
+
         sessionRepository.findByAgentMachineIdAndStatus(
                 machineId, SessionStatus.ACTIVE
         ).ifPresent(s -> {
             throw new IllegalStateException("Agent already in session");
         });
 
-        agentRepository.findByMachineId(machineId).ifPresent(agent -> {
-            agent.setStatus(AgentStatus.BUSY);
-            agentRepository.save(agent);
-        });
+        agent.setStatus(AgentStatus.BUSY);
+        agentRepository.save(agent);
 
         ControlSession session = new ControlSession();
         session.setAgentMachineId(machineId);

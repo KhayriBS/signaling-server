@@ -15,6 +15,8 @@ import java.util.Optional;
 public interface AgentRepository extends JpaRepository<Agent, Long> {
     Optional<Agent> findByMachineId(String machineId);
     List<Agent> findByStatus(AgentStatus status);
+    List<Agent> findByAssignedUsername(String assignedUsername);
+    List<Agent> findByAssignedUsernameAndStatus(String assignedUsername, AgentStatus status);
     @Modifying
     @Transactional
     @Query("""

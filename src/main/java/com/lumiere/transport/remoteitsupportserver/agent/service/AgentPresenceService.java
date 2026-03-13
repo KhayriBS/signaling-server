@@ -4,6 +4,9 @@ import com.lumiere.transport.remoteitsupportserver.agent.entity.Agent;
 import com.lumiere.transport.remoteitsupportserver.agent.entity.AgentStatus;
 import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentRepository;
 import com.lumiere.transport.remoteitsupportserver.auth.security.JwtProvider;
+import com.lumiere.transport.remoteitsupportserver.user.repository.UserRepository;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -14,11 +17,15 @@ import java.util.List;
 public class AgentPresenceService {
     private final AgentRepository agentRepository;
     private final JwtProvider jwtProvider;
+    private final UserRepository userRepository;
 
 
-    public AgentPresenceService(AgentRepository agentRepository, JwtProvider jwtProvider) {
+    public AgentPresenceService(AgentRepository agentRepository,
+                                JwtProvider jwtProvider,
+                                UserRepository userRepository) {
         this.agentRepository = agentRepository;
         this.jwtProvider = jwtProvider;
+        this.userRepository = userRepository;
     }
 
     public Agent registerOrUpdate(String machineId,
@@ -52,12 +59,45 @@ public class AgentPresenceService {
 
         return jwtProvider.generateTokenAgent(agent);
     }
-    public List<Agent> getAllAgents() {
-        return agentRepository.findAll();
+    public List<Agent> getAllAgents(Authentication authentication) {
+        if (isAdmin(authentication)) {
+            return agentRepository.findAll();
+        }
+        return agentRepository.findByAssignedUsername(authentication.getName());
     }
 
-    public List<Agent> getOnlineAgents() {
-        return agentRepository.findByStatus(AgentStatus.ONLINE);
+    public List<Agent> getOnlineAgents(Authentication authentication) {
+        if (isAdmin(authentication)) {
+            return agentRepository.findByStatus(AgentStatus.ONLINE);
+        }
+        return agentRepository.findByAssignedUsernameAndStatus(authentication.getName(), AgentStatus.ONLINE);
+    }
+
+    public Agent assignAgentToUser(Long agentId, String username, Authentication authentication) {
+        if (!isAdmin(authentication)) {
+            throw new AccessDeniedException("Only admins can assign machines");
+        }
+
+        userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+
+        Agent agent = agentRepository.findById(agentId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+
+        agent.setAssignedUsername(username);
+        return agentRepository.save(agent);
+    }
+
+    public Agent unassignAgent(Long agentId, Authentication authentication) {
+        if (!isAdmin(authentication)) {
+            throw new AccessDeniedException("Only admins can unassign machines");
+        }
+
+        Agent agent = agentRepository.findById(agentId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+
+        agent.setAssignedUsername(null);
+        return agentRepository.save(agent);
     }
 
     public void markOffline(String machineId) {
@@ -76,5 +116,11 @@ public class AgentPresenceService {
     public int autoMarkOfflineAgents(long heartbeatTimeoutSeconds) {
         Instant limit = Instant.now().minusSeconds(heartbeatTimeoutSeconds);
         return agentRepository.bulkMarkOffline(limit);
+    }
+
+    private boolean isAdmin(Authentication authentication) {
+        return authentication != null
+                && authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
     }
 }

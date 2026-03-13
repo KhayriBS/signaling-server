@@ -24,4 +24,7 @@ public class Agent {
     private AgentStatus status;
     private Instant lastHeartbeat;
 
+    @Column
+    private String assignedUsername;
+
 }

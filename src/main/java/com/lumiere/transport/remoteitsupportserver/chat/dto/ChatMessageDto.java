@@ -5,6 +5,8 @@ public class ChatMessageDto {
     private Long sessionId;
     private String senderRole;
     private String senderName;
+    private String receiverRole;
+    private String receiverName;
     private String content;
     private String timestamp;
     private boolean delivered;
@@ -20,6 +22,12 @@ public class ChatMessageDto {
 
     public String getSenderName() { return senderName; }
     public void setSenderName(String senderName) { this.senderName = senderName; }
+
+    public String getReceiverRole() { return receiverRole; }
+    public void setReceiverRole(String receiverRole) { this.receiverRole = receiverRole; }
+
+    public String getReceiverName() { return receiverName; }
+    public void setReceiverName(String receiverName) { this.receiverName = receiverName; }
 
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }

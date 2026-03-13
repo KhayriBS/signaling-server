@@ -47,14 +47,27 @@ public class AgentController {
 
 
     @GetMapping
-    public List<Agent> getAllAgents() {
-        return agentPresenceService.getAllAgents();
+    public List<Agent> getAllAgents(Authentication authentication) {
+        return agentPresenceService.getAllAgents(authentication);
     }
 
 
     @GetMapping("/online")
-    public List<Agent> getOnlineAgents() {
-        return agentPresenceService.getOnlineAgents();
+    public List<Agent> getOnlineAgents(Authentication authentication) {
+        return agentPresenceService.getOnlineAgents(authentication);
+    }
+
+    @PostMapping("/{agentId}/assign/{username}")
+    public Agent assignAgent(@PathVariable Long agentId,
+                             @PathVariable String username,
+                             Authentication authentication) {
+        return agentPresenceService.assignAgentToUser(agentId, username, authentication);
+    }
+
+    @PostMapping("/{agentId}/unassign")
+    public Agent unassignAgent(@PathVariable Long agentId,
+                               Authentication authentication) {
+        return agentPresenceService.unassignAgent(agentId, authentication);
     }
     @PostMapping("/metrics")
     public void receiveMetrics(@RequestBody AgentMetricsDto dto, Authentication authentication) {

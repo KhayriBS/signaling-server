@@ -4,8 +4,10 @@ import com.lumiere.transport.remoteitsupportserver.chat.dto.ChatMessageDto;
 import com.lumiere.transport.remoteitsupportserver.chat.dto.SendMessageRequest;
 import com.lumiere.transport.remoteitsupportserver.chat.entity.ChatMessage;
 import com.lumiere.transport.remoteitsupportserver.chat.service.ChatService;
+import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentRepository;
 import com.lumiere.transport.remoteitsupportserver.common.dto.ApiResponse;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,9 +18,12 @@ import java.util.stream.Collectors;
 @RequestMapping("/chat")
 public class ChatController {
     private final ChatService chatService;
+    private final AgentRepository agentRepository;
 
-    public ChatController(ChatService chatService) {
+    public ChatController(ChatService chatService,
+                          AgentRepository agentRepository) {
         this.chatService = chatService;
+        this.agentRepository = agentRepository;
     }
 
     @PostMapping("/send/{sessionId}")
@@ -26,23 +31,30 @@ public class ChatController {
             @PathVariable Long sessionId,
             @RequestBody SendMessageRequest request,
             Authentication authentication) {
+
+        ensureAssignedOrAdmin(sessionId, authentication);
         
         String senderRole = request.getSenderRole();
         String senderName = authentication.getName();
-        
-        // If sender name is from request, use it (for technician)
-        if (request.getSenderName() != null && !request.getSenderName().isEmpty()) {
-            senderName = request.getSenderName();
-        }
 
-        chatService.sendChatMessage(sessionId, senderRole, senderName, request.getContent());
+        chatService.sendChatMessage(
+            sessionId,
+            senderRole,
+            senderName,
+            request.getReceiverRole(),
+            request.getReceiverName(),
+            request.getContent()
+        );
         
         return ResponseEntity.ok(ApiResponse.success(null));
     }
 
     @GetMapping("/messages/{sessionId}")
     public ResponseEntity<ApiResponse<List<ChatMessageDto>>> getMessages(
-            @PathVariable Long sessionId) {
+            @PathVariable Long sessionId,
+            Authentication authentication) {
+
+        ensureAssignedOrAdmin(sessionId, authentication);
         
         List<ChatMessage> messages = chatService.getMessages(sessionId);
         List<ChatMessageDto> dtos = messages.stream()
@@ -54,7 +66,10 @@ public class ChatController {
 
     @GetMapping("/pending/{sessionId}")
     public ResponseEntity<ApiResponse<List<ChatMessageDto>>> getPendingMessages(
-            @PathVariable Long sessionId) {
+            @PathVariable Long sessionId,
+            Authentication authentication) {
+
+        ensureAssignedOrAdmin(sessionId, authentication);
         
         List<ChatMessage> messages = chatService.getPendingMessages(sessionId);
         List<ChatMessageDto> dtos = messages.stream()
@@ -70,9 +85,27 @@ public class ChatController {
         dto.setSessionId(msg.getSessionId());
         dto.setSenderRole(msg.getSenderRole());
         dto.setSenderName(msg.getSenderName());
+        dto.setReceiverRole(msg.getReceiverRole());
+        dto.setReceiverName(msg.getReceiverName());
         dto.setContent(msg.getContent());
         dto.setTimestamp(msg.getTimestamp().toString());
         dto.setDelivered(msg.isDelivered());
         return dto;
+    }
+
+    private void ensureAssignedOrAdmin(Long agentId, Authentication authentication) {
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+        if (isAdmin) {
+            return;
+        }
+
+        var agent = agentRepository.findById(agentId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+
+        String assignedUsername = agent.getAssignedUsername();
+        if (assignedUsername == null || !assignedUsername.equals(authentication.getName())) {
+            throw new AccessDeniedException("Machine is not assigned to current user");
+        }
     }
 }
