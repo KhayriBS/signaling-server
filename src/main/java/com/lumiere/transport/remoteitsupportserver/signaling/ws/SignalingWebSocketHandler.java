@@ -33,6 +33,9 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
 
+        // Allow larger signaling payloads (file transfer chunks)
+        session.setTextMessageSizeLimit(512 * 1024);
+
         URI uri = session.getUri();
         if (uri == null) {
             session.close(CloseStatus.BAD_DATA);
