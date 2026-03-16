@@ -7,6 +7,7 @@ public enum SignalType {
     ICE,          // ICE candidate
     LEAVE,        // quitter session
     CHAT,         // chat message
+    STREAM_STATS, // stream bitrate/fps telemetry
     ERROR,
     // File Transfer
     FILE_LIST_REQUEST,   // Request directory listing
