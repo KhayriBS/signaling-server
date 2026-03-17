@@ -81,6 +81,16 @@ public class SessionService {
                     agentRepository.save(agent);
                 });
     }
+
+    public void stopSessionByToken(String signalingToken) {
+        if (signalingToken == null || signalingToken.isBlank()) {
+            return;
+        }
+
+        sessionRepository.findBySignalingTokenAndStatus(signalingToken, SessionStatus.ACTIVE)
+                .ifPresent(session -> stopSession(session.getId()));
+    }
+
     /**
      * Récupère la session active pour un agent donné.
      * Utilisé par l'agent pour savoir s'il doit rejoindre une session de signaling.

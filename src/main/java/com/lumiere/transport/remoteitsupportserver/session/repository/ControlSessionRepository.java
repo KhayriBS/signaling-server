@@ -12,4 +12,5 @@ public interface ControlSessionRepository extends JpaRepository<ControlSession, 
             SessionStatus status
     );
     Optional<ControlSession> findBySignalingToken(String signalingToken);
+    Optional<ControlSession> findBySignalingTokenAndStatus(String signalingToken, SessionStatus status);
 }

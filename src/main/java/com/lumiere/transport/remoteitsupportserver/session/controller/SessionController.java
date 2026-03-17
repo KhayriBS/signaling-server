@@ -48,6 +48,14 @@ public class SessionController {
         return ApiResponse.success(null);
     }
 
+    @PostMapping("/stop-by-token/{token}")
+    public ApiResponse<Void> stopSessionByToken(
+            @PathVariable String token) {
+
+        sessionService.stopSessionByToken(token);
+        return ApiResponse.success(null);
+    }
+
     /**
      * Récupère la session active en attente pour un agent donné.
      * L'agent appelle cet endpoint pour savoir s'il doit rejoindre une session.

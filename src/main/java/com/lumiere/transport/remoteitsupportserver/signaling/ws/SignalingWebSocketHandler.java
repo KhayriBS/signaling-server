@@ -92,6 +92,7 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
 
         // Stocker le sessionId dans les attributs de la session WebSocket
         session.getAttributes().put("sessionId", String.valueOf(controlSession.getId()));
+        session.getAttributes().put("role", role);
     }
 
     @Override
@@ -125,7 +126,9 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String sessionId = (String) session.getAttributes().get("sessionId");
+        String role = (String) session.getAttributes().get("role");
         if (sessionId != null) {
+            notifyAndClosePeer(sessionId, role);
             signalingService.remove(sessionId, session);
             terminateSession(sessionId);
         }
@@ -134,9 +137,29 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         String sessionId = (String) session.getAttributes().get("sessionId");
+        String role = (String) session.getAttributes().get("role");
         if (sessionId != null) {
+            notifyAndClosePeer(sessionId, role);
             signalingService.remove(sessionId, session);
             terminateSession(sessionId);
+        }
+    }
+
+    private void notifyAndClosePeer(String sessionId, String role) {
+        try {
+            String peerRole = "agent".equals(role) ? "viewer" : "agent";
+            WebSocketSession peer = signalingService.getPeer(sessionId, peerRole);
+            if (peer != null && peer.isOpen()) {
+                SignalMessage leave = new SignalMessage();
+                leave.setType(SignalType.LEAVE);
+                leave.setFrom(role == null ? "unknown" : role);
+                leave.setTo(peerRole);
+                leave.setPayload(Map.of("reason", "peer_disconnected"));
+                peer.sendMessage(new TextMessage(mapper.writeValueAsString(leave)));
+                peer.close(CloseStatus.NORMAL);
+            }
+        } catch (Exception ex) {
+            log.debug("Failed to notify/close peer for session {}: {}", sessionId, ex.getMessage());
         }
     }
 
