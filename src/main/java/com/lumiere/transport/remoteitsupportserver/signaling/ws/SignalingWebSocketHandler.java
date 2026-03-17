@@ -3,9 +3,12 @@ package com.lumiere.transport.remoteitsupportserver.signaling.ws;
 import com.lumiere.transport.remoteitsupportserver.session.entity.ControlSession;
 import com.lumiere.transport.remoteitsupportserver.session.entity.SessionStatus;
 import com.lumiere.transport.remoteitsupportserver.session.repository.ControlSessionRepository;
+import com.lumiere.transport.remoteitsupportserver.session.service.SessionService;
 import com.lumiere.transport.remoteitsupportserver.signaling.model.SignalMessage;
 import com.lumiere.transport.remoteitsupportserver.signaling.model.SignalType;
 import com.lumiere.transport.remoteitsupportserver.signaling.service.SignalingService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -20,14 +23,19 @@ import java.util.Map;
 @Component
 
 public class SignalingWebSocketHandler extends TextWebSocketHandler {
+    private static final Logger log = LoggerFactory.getLogger(SignalingWebSocketHandler.class);
+
     private final SignalingService signalingService;
     private final ControlSessionRepository controlSessionRepository;
+    private final SessionService sessionService;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public SignalingWebSocketHandler(SignalingService signalingService,
-                                   ControlSessionRepository controlSessionRepository){
+                                   ControlSessionRepository controlSessionRepository,
+                                   SessionService sessionService){
         this.signalingService = signalingService;
         this.controlSessionRepository = controlSessionRepository;
+        this.sessionService = sessionService;
     }
 
     @Override
@@ -119,6 +127,28 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
         String sessionId = (String) session.getAttributes().get("sessionId");
         if (sessionId != null) {
             signalingService.remove(sessionId, session);
+            terminateSession(sessionId);
+        }
+    }
+
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) {
+        String sessionId = (String) session.getAttributes().get("sessionId");
+        if (sessionId != null) {
+            signalingService.remove(sessionId, session);
+            terminateSession(sessionId);
+        }
+    }
+
+    private void terminateSession(String sessionId) {
+        try {
+            Long id = Long.parseLong(sessionId);
+            ControlSession current = controlSessionRepository.findById(id).orElse(null);
+            if (current != null && current.getStatus() == SessionStatus.ACTIVE) {
+                sessionService.stopSession(id);
+            }
+        } catch (Exception ex) {
+            log.warn("Unable to terminate session {} on signaling disconnect: {}", sessionId, ex.getMessage());
         }
     }
 
