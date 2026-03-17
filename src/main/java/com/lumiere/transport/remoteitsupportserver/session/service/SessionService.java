@@ -1,6 +1,7 @@
 package com.lumiere.transport.remoteitsupportserver.session.service;
 
 import com.lumiere.transport.remoteitsupportserver.agent.entity.AgentStatus;
+import com.lumiere.transport.remoteitsupportserver.agent.entity.Agent;
 import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentRepository;
 import com.lumiere.transport.remoteitsupportserver.session.entity.ControlSession;
 import com.lumiere.transport.remoteitsupportserver.session.entity.SessionStatus;
@@ -41,25 +42,27 @@ public class SessionService {
             }
         }
 
-        sessionRepository.findByAgentMachineIdAndStatus(
-                machineId, SessionStatus.ACTIVE
-        ).ifPresent(s -> {
-            throw new IllegalStateException("Agent already in session");
-        });
+        return createActiveSession(agent, authentication.getName());
+    }
 
-        agent.setStatus(AgentStatus.BUSY);
-        agentRepository.save(agent);
+    public ControlSession startSessionByCode(String connectionCode,
+                                             Authentication authentication) {
+        if (connectionCode == null || !connectionCode.matches("\\d{6}")) {
+            throw new IllegalArgumentException("Connection code must be exactly 6 digits");
+        }
 
-        ControlSession session = new ControlSession();
-        session.setAgentMachineId(machineId);
-        session.setTechnicianUsername(authentication.getName());
-        session.setStatus(SessionStatus.ACTIVE);
-        session.setStartedAt(Instant.now());
+        Agent agent = agentRepository.findByConnectionCode(connectionCode)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid connection code"));
 
-        // 🔐 TOKEN SIGNALING
-        session.setSignalingToken(SessionToken.generate());
+        if (agent.getStatus() != AgentStatus.ONLINE) {
+            throw new IllegalStateException("Target machine is offline");
+        }
 
-        return sessionRepository.save(session);
+        String technicianName = (authentication != null && authentication.getName() != null)
+                ? authentication.getName()
+                : "guest-" + connectionCode;
+
+        return createActiveSession(agent, technicianName);
     }
 
     public void stopSession(Long sessionId) {
@@ -87,4 +90,25 @@ public class SessionService {
                 machineId,
                 SessionStatus.ACTIVE
         );
-    }}
+    }
+
+    private ControlSession createActiveSession(Agent agent, String technicianName) {
+        sessionRepository.findByAgentMachineIdAndStatus(
+                agent.getMachineId(), SessionStatus.ACTIVE
+        ).ifPresent(s -> {
+            throw new IllegalStateException("Agent already in session");
+        });
+
+        agent.setStatus(AgentStatus.BUSY);
+        agentRepository.save(agent);
+
+        ControlSession session = new ControlSession();
+        session.setAgentMachineId(agent.getMachineId());
+        session.setTechnicianUsername(technicianName);
+        session.setStatus(SessionStatus.ACTIVE);
+        session.setStartedAt(Instant.now());
+        session.setSignalingToken(SessionToken.generate());
+
+        return sessionRepository.save(session);
+    }
+}

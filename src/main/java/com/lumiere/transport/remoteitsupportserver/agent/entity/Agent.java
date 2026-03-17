@@ -27,4 +27,7 @@ public class Agent {
     @Column
     private String assignedUsername;
 
+    @Column(unique = true, length = 6)
+    private String connectionCode;
+
 }

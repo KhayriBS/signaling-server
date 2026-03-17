@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 
@@ -43,6 +44,7 @@ public class AgentPresenceService {
         agent.setOs(os);
         agent.setStatus(AgentStatus.ONLINE);
         agent.setLastHeartbeat(Instant.now());
+        ensureConnectionCode(agent);
 
         return agentRepository.save(agent);
     }
@@ -57,7 +59,13 @@ public class AgentPresenceService {
                     return a;
                 });
 
-        return jwtProvider.generateTokenAgent(agent);
+        agent.setOs(os);
+        agent.setStatus(AgentStatus.ONLINE);
+        agent.setLastHeartbeat(Instant.now());
+        ensureConnectionCode(agent);
+        Agent saved = agentRepository.save(agent);
+
+        return jwtProvider.generateTokenAgent(saved);
     }
     public List<Agent> getAllAgents(Authentication authentication) {
         if (isAdmin(authentication)) {
@@ -116,6 +124,19 @@ public class AgentPresenceService {
     public int autoMarkOfflineAgents(long heartbeatTimeoutSeconds) {
         Instant limit = Instant.now().minusSeconds(heartbeatTimeoutSeconds);
         return agentRepository.bulkMarkOffline(limit);
+    }
+
+    private void ensureConnectionCode(Agent agent) {
+        if (agent.getConnectionCode() != null && agent.getConnectionCode().matches("\\d{6}")) {
+            return;
+        }
+
+        String code;
+        do {
+            code = String.format("%06d", ThreadLocalRandom.current().nextInt(0, 1_000_000));
+        } while (agentRepository.findByConnectionCode(code).isPresent());
+
+        agent.setConnectionCode(code);
     }
 
     private boolean isAdmin(Authentication authentication) {

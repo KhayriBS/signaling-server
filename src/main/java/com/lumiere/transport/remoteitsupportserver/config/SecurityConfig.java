@@ -40,6 +40,7 @@ public class SecurityConfig {
                         sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**", "/login", "/register", "/ws/**", "/agents/login", "/agents/register").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/sessions/start-by-code/**").permitAll()
                     .requestMatchers(HttpMethod.POST, "/agents/*/assign/*", "/agents/*/unassign").hasRole("ADMIN")
                         .requestMatchers("/agents/heartbeat", "/agents/offline", "/agents/metrics").hasRole("AGENT")
                         .requestMatchers("/sessions/pending/**").hasRole("AGENT")

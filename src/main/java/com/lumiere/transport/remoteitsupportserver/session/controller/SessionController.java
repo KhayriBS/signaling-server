@@ -30,6 +30,16 @@ public class SessionController {
         );
     }
 
+    @PostMapping("/start-by-code/{code}")
+    public ApiResponse<ControlSession> startSessionByCode(
+            @PathVariable String code,
+            Authentication authentication) {
+
+        return ApiResponse.success(
+                sessionService.startSessionByCode(code, authentication)
+        );
+    }
+
     @PostMapping("/stop/{sessionId}")
     public ApiResponse<Void> stopSession(
             @PathVariable Long sessionId) {
