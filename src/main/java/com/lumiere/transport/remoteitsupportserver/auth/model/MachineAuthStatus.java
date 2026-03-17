@@ -11,4 +11,5 @@ public class MachineAuthStatus {
     private boolean machineExists;
     private boolean hasAssignedUser;
     private String assignedUsername;
+    private String connectionCode;
 }

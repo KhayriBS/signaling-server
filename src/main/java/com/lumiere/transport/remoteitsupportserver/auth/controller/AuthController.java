@@ -47,14 +47,15 @@ public class AuthController {
         public ApiResponse<MachineAuthStatus> machineStatus(@PathVariable String machineId) {
                 var optionalAgent = agentRepository.findByMachineId(machineId);
                 if (optionalAgent.isEmpty()) {
-                        return ApiResponse.success(new MachineAuthStatus(false, false, null));
+                        return ApiResponse.success(new MachineAuthStatus(false, false, null, null));
                 }
 
                 var agent = optionalAgent.get();
                 String assigned = agent.getAssignedUsername();
                 boolean hasAssignedUser = assigned != null && !assigned.isBlank();
+                String connectionCode = agent.getConnectionCode();
 
-                return ApiResponse.success(new MachineAuthStatus(true, hasAssignedUser, assigned));
+                return ApiResponse.success(new MachineAuthStatus(true, hasAssignedUser, assigned, connectionCode));
         }
 
     @PostMapping("/login")
