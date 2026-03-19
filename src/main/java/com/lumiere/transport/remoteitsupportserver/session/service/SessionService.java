@@ -12,6 +12,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -42,7 +43,12 @@ public class SessionService {
             }
         }
 
-        return createActiveSession(agent, authentication.getName());
+        String technicianRole = isAdmin ? "ADMIN" : "USER";
+        if (isAdmin) {
+            return createSession(agent, authentication.getName(), technicianRole, SessionStatus.ACTIVE, true, true);
+        }
+
+        return createSession(agent, authentication.getName(), technicianRole, SessionStatus.PENDING_APPROVAL, false, false);
     }
 
     public ControlSession startSessionByCode(String connectionCode,
@@ -58,11 +64,19 @@ public class SessionService {
             throw new IllegalStateException("Target machine is offline");
         }
 
+        boolean isAdmin = authentication != null
+            && authentication.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+
         String technicianName = (authentication != null && authentication.getName() != null)
                 ? authentication.getName()
                 : "guest-" + connectionCode;
 
-        return createActiveSession(agent, technicianName);
+        String technicianRole = isAdmin ? "ADMIN" : "USER";
+        if (isAdmin) {
+            return createSession(agent, technicianName, technicianRole, SessionStatus.ACTIVE, true, true);
+        }
+
+        return createSession(agent, technicianName, technicianRole, SessionStatus.PENDING_APPROVAL, false, false);
     }
 
     public void stopSession(Long sessionId) {
@@ -87,8 +101,63 @@ public class SessionService {
             return;
         }
 
-        sessionRepository.findBySignalingTokenAndStatus(signalingToken, SessionStatus.ACTIVE)
+        sessionRepository.findBySignalingTokenAndStatusIn(signalingToken,
+                        List.of(SessionStatus.ACTIVE, SessionStatus.PENDING_APPROVAL))
                 .ifPresent(session -> stopSession(session.getId()));
+    }
+
+    public Optional<ControlSession> getPendingApprovalForMachine(String machineId, Authentication authentication) {
+        assertUserCanApproveMachine(machineId, authentication);
+        return sessionRepository.findByAgentMachineIdAndStatus(machineId, SessionStatus.PENDING_APPROVAL);
+    }
+
+    public Optional<ControlSession> getPendingApprovalForMachinePublic(String machineId) {
+        return sessionRepository.findByAgentMachineIdAndStatus(machineId, SessionStatus.PENDING_APPROVAL);
+    }
+
+    public void approveSession(Long sessionId,
+                               boolean allowRemoteInput,
+                               boolean allowFileTransfer,
+                               Authentication authentication) {
+        ControlSession session = sessionRepository.findById(sessionId).orElseThrow();
+        assertUserCanApproveMachine(session.getAgentMachineId(), authentication);
+
+        if (session.getStatus() != SessionStatus.PENDING_APPROVAL) {
+            throw new IllegalStateException("Session is not awaiting approval");
+        }
+
+        session.setAllowRemoteInput(allowRemoteInput);
+        session.setAllowFileTransfer(allowFileTransfer);
+        session.setStatus(SessionStatus.ACTIVE);
+        sessionRepository.save(session);
+    }
+
+    public void rejectSession(Long sessionId, Authentication authentication) {
+        ControlSession session = sessionRepository.findById(sessionId).orElseThrow();
+        assertUserCanApproveMachine(session.getAgentMachineId(), authentication);
+        stopSession(sessionId);
+    }
+
+    public void approveSessionPublic(Long sessionId,
+                                     boolean allowRemoteInput,
+                                     boolean allowFileTransfer) {
+        ControlSession session = sessionRepository.findById(sessionId).orElseThrow();
+
+        if (session.getStatus() != SessionStatus.PENDING_APPROVAL) {
+            throw new IllegalStateException("Session is not awaiting approval");
+        }
+
+        session.setAllowRemoteInput(allowRemoteInput);
+        session.setAllowFileTransfer(allowFileTransfer);
+        session.setStatus(SessionStatus.ACTIVE);
+        sessionRepository.save(session);
+    }
+
+    public void rejectSessionPublic(Long sessionId) {
+        ControlSession session = sessionRepository.findById(sessionId).orElseThrow();
+        if (session.getStatus() == SessionStatus.PENDING_APPROVAL || session.getStatus() == SessionStatus.ACTIVE) {
+            stopSession(sessionId);
+        }
     }
 
     /**
@@ -102,10 +171,26 @@ public class SessionService {
         );
     }
 
-    private ControlSession createActiveSession(Agent agent, String technicianName) {
-        sessionRepository.findByAgentMachineIdAndStatus(
-                agent.getMachineId(), SessionStatus.ACTIVE
-        ).ifPresent(s -> {
+    public Optional<ControlSession> getSessionByToken(String signalingToken) {
+        if (signalingToken == null || signalingToken.isBlank()) {
+            return Optional.empty();
+        }
+        return sessionRepository.findBySignalingToken(signalingToken);
+    }
+
+    private ControlSession createSession(Agent agent,
+                                         String technicianName,
+                                         String technicianRole,
+                                         SessionStatus targetStatus,
+                                         boolean allowRemoteInput,
+                                         boolean allowFileTransfer) {
+        sessionRepository.findByAgentMachineIdAndStatusIn(
+                agent.getMachineId(), List.of(SessionStatus.ACTIVE, SessionStatus.PENDING_APPROVAL)
+        ).ifPresent(existingSession -> {
+            if (existingSession.getStatus() == SessionStatus.PENDING_APPROVAL) {
+                stopSession(existingSession.getId());
+                return;
+            }
             throw new IllegalStateException("Agent already in session");
         });
 
@@ -115,10 +200,34 @@ public class SessionService {
         ControlSession session = new ControlSession();
         session.setAgentMachineId(agent.getMachineId());
         session.setTechnicianUsername(technicianName);
-        session.setStatus(SessionStatus.ACTIVE);
+        session.setTechnicianRole(technicianRole);
+        session.setAllowRemoteInput(allowRemoteInput);
+        session.setAllowFileTransfer(allowFileTransfer);
+        session.setStatus(targetStatus);
         session.setStartedAt(Instant.now());
         session.setSignalingToken(SessionToken.generate());
 
         return sessionRepository.save(session);
+    }
+
+    private void assertUserCanApproveMachine(String machineId, Authentication authentication) {
+        if (authentication == null) {
+            throw new AccessDeniedException("Authentication required");
+        }
+
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+        if (isAdmin) {
+            return;
+        }
+
+        var agent = agentRepository.findByMachineId(machineId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + machineId));
+        String assignedUsername = agent.getAssignedUsername();
+        String currentUsername = authentication.getName();
+
+        if (assignedUsername == null || !assignedUsername.equals(currentUsername)) {
+            throw new AccessDeniedException("Machine is not assigned to current user");
+        }
     }
 }

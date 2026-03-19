@@ -21,6 +21,9 @@ public class ControlSession {
     private String signalingToken;
     private String agentMachineId;
     private String technicianUsername;
+    private String technicianRole;
+    private boolean allowRemoteInput;
+    private boolean allowFileTransfer;
     @Enumerated(EnumType.STRING)
     private SessionStatus status;
 

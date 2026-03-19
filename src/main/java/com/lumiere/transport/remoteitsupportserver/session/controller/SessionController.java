@@ -2,12 +2,14 @@ package com.lumiere.transport.remoteitsupportserver.session.controller;
 
 import com.lumiere.transport.remoteitsupportserver.common.dto.ApiResponse;
 import com.lumiere.transport.remoteitsupportserver.session.entity.ControlSession;
+import com.lumiere.transport.remoteitsupportserver.session.model.ApprovalDecisionRequest;
 import com.lumiere.transport.remoteitsupportserver.session.service.SessionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -53,6 +55,79 @@ public class SessionController {
             @PathVariable String token) {
 
         sessionService.stopSessionByToken(token);
+        return ApiResponse.success(null);
+    }
+
+    @GetMapping("/approval/{machineId}")
+    public ResponseEntity<ControlSession> getPendingApprovalForMachine(
+            @PathVariable String machineId,
+            Authentication authentication) {
+
+        return sessionService.getPendingApprovalForMachine(machineId, authentication)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping("/approval-public/{machineId}")
+    public ResponseEntity<ControlSession> getPendingApprovalForMachinePublic(
+            @PathVariable String machineId) {
+
+        return sessionService.getPendingApprovalForMachinePublic(machineId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping("/by-token/{token}")
+    public ResponseEntity<ControlSession> getSessionByToken(
+            @PathVariable String token) {
+
+        return sessionService.getSessionByToken(token)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @PostMapping("/approve/{sessionId}")
+    public ApiResponse<Void> approveSession(
+            @PathVariable Long sessionId,
+            @RequestBody ApprovalDecisionRequest request,
+            Authentication authentication) {
+
+        sessionService.approveSession(
+                sessionId,
+                request.isAllowRemoteInput(),
+                request.isAllowFileTransfer(),
+                authentication
+        );
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/reject/{sessionId}")
+    public ApiResponse<Void> rejectSession(
+            @PathVariable Long sessionId,
+            Authentication authentication) {
+
+        sessionService.rejectSession(sessionId, authentication);
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/approve-public/{sessionId}")
+    public ApiResponse<Void> approveSessionPublic(
+            @PathVariable Long sessionId,
+            @RequestBody ApprovalDecisionRequest request) {
+
+        sessionService.approveSessionPublic(
+                sessionId,
+                request.isAllowRemoteInput(),
+                request.isAllowFileTransfer()
+        );
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/reject-public/{sessionId}")
+    public ApiResponse<Void> rejectSessionPublic(
+            @PathVariable Long sessionId) {
+
+        sessionService.rejectSessionPublic(sessionId);
         return ApiResponse.success(null);
     }
 
