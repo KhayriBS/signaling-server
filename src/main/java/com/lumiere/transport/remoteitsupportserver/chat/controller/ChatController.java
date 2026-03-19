@@ -4,11 +4,8 @@ import com.lumiere.transport.remoteitsupportserver.chat.dto.ChatMessageDto;
 import com.lumiere.transport.remoteitsupportserver.chat.dto.SendMessageRequest;
 import com.lumiere.transport.remoteitsupportserver.chat.entity.ChatMessage;
 import com.lumiere.transport.remoteitsupportserver.chat.service.ChatService;
-import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentRepository;
 import com.lumiere.transport.remoteitsupportserver.common.dto.ApiResponse;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -18,27 +15,25 @@ import java.util.stream.Collectors;
 @RequestMapping("/chat")
 public class ChatController {
     private final ChatService chatService;
-    private final AgentRepository agentRepository;
 
-    public ChatController(ChatService chatService,
-                          AgentRepository agentRepository) {
+    public ChatController(ChatService chatService) {
         this.chatService = chatService;
-        this.agentRepository = agentRepository;
     }
 
-    @PostMapping("/send/{sessionId}")
+    @PostMapping("/send/{roomId}")
     public ResponseEntity<ApiResponse<ChatMessageDto>> sendMessage(
-            @PathVariable Long sessionId,
-            @RequestBody SendMessageRequest request,
-            Authentication authentication) {
+            @PathVariable String roomId,
+            @RequestBody SendMessageRequest request) {
 
-        ensureAssignedOrAdmin(sessionId, authentication);
-        
-        String senderRole = request.getSenderRole();
-        String senderName = authentication.getName();
+        String senderRole = request.getSenderRole() == null || request.getSenderRole().isBlank()
+                ? "viewer"
+                : request.getSenderRole();
+        String senderName = request.getSenderName() == null || request.getSenderName().isBlank()
+                ? "Utilisateur"
+                : request.getSenderName();
 
         chatService.sendChatMessage(
-            sessionId,
+            roomId,
             senderRole,
             senderName,
             request.getReceiverRole(),
@@ -49,14 +44,11 @@ public class ChatController {
         return ResponseEntity.ok(ApiResponse.success(null));
     }
 
-    @GetMapping("/messages/{sessionId}")
+    @GetMapping("/messages/{roomId}")
     public ResponseEntity<ApiResponse<List<ChatMessageDto>>> getMessages(
-            @PathVariable Long sessionId,
-            Authentication authentication) {
+            @PathVariable String roomId) {
 
-        ensureAssignedOrAdmin(sessionId, authentication);
-        
-        List<ChatMessage> messages = chatService.getMessages(sessionId);
+        List<ChatMessage> messages = chatService.getMessages(roomId);
         List<ChatMessageDto> dtos = messages.stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
@@ -64,14 +56,11 @@ public class ChatController {
         return ResponseEntity.ok(ApiResponse.success(dtos));
     }
 
-    @GetMapping("/pending/{sessionId}")
+    @GetMapping("/pending/{roomId}")
     public ResponseEntity<ApiResponse<List<ChatMessageDto>>> getPendingMessages(
-            @PathVariable Long sessionId,
-            Authentication authentication) {
+            @PathVariable String roomId) {
 
-        ensureAssignedOrAdmin(sessionId, authentication);
-        
-        List<ChatMessage> messages = chatService.getPendingMessages(sessionId);
+        List<ChatMessage> messages = chatService.getPendingMessages(roomId);
         List<ChatMessageDto> dtos = messages.stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
@@ -82,7 +71,7 @@ public class ChatController {
     private ChatMessageDto toDto(ChatMessage msg) {
         ChatMessageDto dto = new ChatMessageDto();
         dto.setId(msg.getId());
-        dto.setSessionId(msg.getSessionId());
+        dto.setRoomId(msg.getRoomId());
         dto.setSenderRole(msg.getSenderRole());
         dto.setSenderName(msg.getSenderName());
         dto.setReceiverRole(msg.getReceiverRole());
@@ -91,21 +80,5 @@ public class ChatController {
         dto.setTimestamp(msg.getTimestamp().toString());
         dto.setDelivered(msg.isDelivered());
         return dto;
-    }
-
-    private void ensureAssignedOrAdmin(Long agentId, Authentication authentication) {
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
-        if (isAdmin) {
-            return;
-        }
-
-        var agent = agentRepository.findById(agentId)
-                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-
-        String assignedUsername = agent.getAssignedUsername();
-        if (assignedUsername == null || !assignedUsername.equals(authentication.getName())) {
-            throw new AccessDeniedException("Machine is not assigned to current user");
-        }
     }
 }

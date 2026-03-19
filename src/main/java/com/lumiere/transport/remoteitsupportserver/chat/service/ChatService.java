@@ -14,34 +14,34 @@ public class ChatService {
         this.chatMessageRepository = chatMessageRepository;
     }
 
-    public ChatMessage saveMessage(Long sessionId,
+    public ChatMessage saveMessage(String roomId,
                                    String senderRole,
                                    String senderName,
                                    String receiverRole,
                                    String receiverName,
                                    String content) {
-        ChatMessage message = new ChatMessage(sessionId, senderRole, senderName, receiverRole, receiverName, content);
+        ChatMessage message = new ChatMessage(roomId, senderRole, senderName, receiverRole, receiverName, content);
         return chatMessageRepository.save(message);
     }
 
-    public List<ChatMessage> getMessages(Long sessionId) {
-        return chatMessageRepository.findBySessionIdOrderByTimestampAsc(sessionId);
+    public List<ChatMessage> getMessages(String roomId) {
+        return chatMessageRepository.findByRoomIdOrderByTimestampAsc(roomId);
     }
 
-    public void sendChatMessage(Long sessionId,
+    public void sendChatMessage(String roomId,
                                 String senderRole,
                                 String senderName,
                                 String receiverRole,
                                 String receiverName,
                                 String content) {
         // Persist only (chat flow is Viewer <-> Backend, not via Windows agent)
-        ChatMessage saved = saveMessage(sessionId, senderRole, senderName, receiverRole, receiverName, content);
+        ChatMessage saved = saveMessage(roomId, senderRole, senderName, receiverRole, receiverName, content);
         saved.setDelivered(true);
         chatMessageRepository.save(saved);
     }
 
-    public List<ChatMessage> getPendingMessages(Long sessionId) {
-        return chatMessageRepository.findBySessionIdAndDeliveredFalseOrderByTimestampAsc(sessionId);
+    public List<ChatMessage> getPendingMessages(String roomId) {
+        return chatMessageRepository.findByRoomIdAndDeliveredFalseOrderByTimestampAsc(roomId);
     }
 
     public void markAsDelivered(Long messageId) {

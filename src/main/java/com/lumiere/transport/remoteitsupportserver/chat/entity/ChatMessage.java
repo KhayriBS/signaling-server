@@ -11,7 +11,7 @@ public class ChatMessage {
     private Long id;
 
     @Column(nullable = false)
-    private Long sessionId;
+    private String roomId;
 
     @Column(nullable = false)
     private String senderRole; // "viewer" or "agent"
@@ -38,16 +38,16 @@ public class ChatMessage {
         this.timestamp = LocalDateTime.now();
     }
 
-    public ChatMessage(Long sessionId, String senderRole, String senderName, String content) {
-        this.sessionId = sessionId;
+    public ChatMessage(String roomId, String senderRole, String senderName, String content) {
+        this.roomId = roomId;
         this.senderRole = senderRole;
         this.senderName = senderName;
         this.content = content;
         this.timestamp = LocalDateTime.now();
     }
 
-    public ChatMessage(Long sessionId, String senderRole, String senderName, String receiverRole, String receiverName, String content) {
-        this.sessionId = sessionId;
+    public ChatMessage(String roomId, String senderRole, String senderName, String receiverRole, String receiverName, String content) {
+        this.roomId = roomId;
         this.senderRole = senderRole;
         this.senderName = senderName;
         this.receiverRole = receiverRole;
@@ -60,8 +60,8 @@ public class ChatMessage {
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
-    public Long getSessionId() { return sessionId; }
-    public void setSessionId(Long sessionId) { this.sessionId = sessionId; }
+    public String getRoomId() { return roomId; }
+    public void setRoomId(String roomId) { this.roomId = roomId; }
 
     public String getSenderRole() { return senderRole; }
     public void setSenderRole(String senderRole) { this.senderRole = senderRole; }

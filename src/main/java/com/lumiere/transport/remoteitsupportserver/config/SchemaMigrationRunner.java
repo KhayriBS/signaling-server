@@ -18,6 +18,11 @@ public class SchemaMigrationRunner implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
+        migrateControlSessionsStatus();
+        migrateChatMessagesRoomId();
+    }
+
+    private void migrateControlSessionsStatus() {
         try {
             String dataType = jdbcTemplate.queryForObject(
                     """
@@ -36,6 +41,47 @@ public class SchemaMigrationRunner implements CommandLineRunner {
             }
         } catch (Exception e) {
             log.warn("Schema migration check for control_sessions.status skipped: {}", e.getMessage());
+        }
+    }
+
+    private void migrateChatMessagesRoomId() {
+        try {
+            Integer roomIdColumnExists = jdbcTemplate.queryForObject(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'chat_messages'
+                      AND COLUMN_NAME = 'room_id'
+                    """,
+                    Integer.class
+            );
+
+            if (roomIdColumnExists != null && roomIdColumnExists == 0) {
+                log.info("Adding chat_messages.room_id column");
+                jdbcTemplate.execute("ALTER TABLE chat_messages ADD COLUMN room_id VARCHAR(128) NULL");
+            }
+
+            Integer sessionIdColumnExists = jdbcTemplate.queryForObject(
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'chat_messages'
+                      AND COLUMN_NAME = 'session_id'
+                    """,
+                    Integer.class
+            );
+
+            if (sessionIdColumnExists != null && sessionIdColumnExists > 0) {
+                jdbcTemplate.execute("UPDATE chat_messages SET room_id = CONCAT('session-', session_id) WHERE room_id IS NULL");
+                jdbcTemplate.execute("ALTER TABLE chat_messages MODIFY COLUMN session_id BIGINT NULL");
+            }
+
+            jdbcTemplate.execute("UPDATE chat_messages SET room_id = 'legacy-room' WHERE room_id IS NULL OR room_id = ''");
+            jdbcTemplate.execute("ALTER TABLE chat_messages MODIFY COLUMN room_id VARCHAR(128) NOT NULL");
+        } catch (Exception e) {
+            log.warn("Schema migration check for chat_messages.room_id skipped: {}", e.getMessage());
         }
     }
 }

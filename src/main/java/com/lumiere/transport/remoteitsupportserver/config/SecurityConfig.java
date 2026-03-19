@@ -43,6 +43,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/sessions/start-by-code/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/stop-by-token/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/sessions/by-token/**").permitAll()
+                        .requestMatchers("/chat/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/sessions/approval-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/approve-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/reject-public/**").permitAll()

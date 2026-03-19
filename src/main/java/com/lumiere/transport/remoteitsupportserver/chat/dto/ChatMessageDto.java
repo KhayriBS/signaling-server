@@ -2,7 +2,7 @@ package com.lumiere.transport.remoteitsupportserver.chat.dto;
 
 public class ChatMessageDto {
     private Long id;
-    private Long sessionId;
+    private String roomId;
     private String senderRole;
     private String senderName;
     private String receiverRole;
@@ -14,8 +14,8 @@ public class ChatMessageDto {
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
-    public Long getSessionId() { return sessionId; }
-    public void setSessionId(Long sessionId) { this.sessionId = sessionId; }
+    public String getRoomId() { return roomId; }
+    public void setRoomId(String roomId) { this.roomId = roomId; }
 
     public String getSenderRole() { return senderRole; }
     public void setSenderRole(String senderRole) { this.senderRole = senderRole; }

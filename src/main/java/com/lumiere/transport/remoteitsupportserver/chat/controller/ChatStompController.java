@@ -25,22 +25,22 @@ public class ChatStompController {
     }
 
     /**
-     * Handle messages sent to /app/chat.send/{sessionId}
-     * Broadcast to /topic/chat/{sessionId}
+        * Handle messages sent to /app/chat.send/{roomId}
+        * Broadcast to /topic/chat/{roomId}
      */
-    @MessageMapping("/chat.send/{sessionId}")
-    public void sendMessage(@DestinationVariable Long sessionId,
+        @MessageMapping("/chat.send/{roomId}")
+        public void sendMessage(@DestinationVariable String roomId,
                            @Payload ChatMessageDto message) {
         // Set timestamp if not provided
         if (message.getTimestamp() == null || message.getTimestamp().isEmpty()) {
             message.setTimestamp(LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         }
-        message.setSessionId(sessionId);
+        message.setRoomId(roomId);
         message.setDelivered(true);
 
         // Save to database
         ChatMessage entity = new ChatMessage(
-            sessionId,
+            roomId,
             message.getSenderRole(),
             message.getSenderName(),
             message.getReceiverRole(),
@@ -54,16 +54,16 @@ public class ChatStompController {
         message.setReceiverName(saved.getReceiverName());
 
         // Broadcast to all subscribers of this session's chat topic
-        messagingTemplate.convertAndSend("/topic/chat/" + sessionId, message);
+        messagingTemplate.convertAndSend("/topic/chat/" + roomId, message);
     }
 
     /**
      * Handle typing notifications
      */
-    @MessageMapping("/chat.typing/{sessionId}")
-    public void typing(@DestinationVariable Long sessionId,
+    @MessageMapping("/chat.typing/{roomId}")
+    public void typing(@DestinationVariable String roomId,
                       @Payload TypingNotification notification) {
-        messagingTemplate.convertAndSend("/topic/chat/" + sessionId + "/typing", notification);
+        messagingTemplate.convertAndSend("/topic/chat/" + roomId + "/typing", notification);
     }
 
     /**
