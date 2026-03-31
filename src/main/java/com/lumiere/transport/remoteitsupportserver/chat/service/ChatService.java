@@ -28,16 +28,15 @@ public class ChatService {
         return chatMessageRepository.findByRoomIdOrderByTimestampAsc(roomId);
     }
 
-    public void sendChatMessage(String roomId,
-                                String senderRole,
-                                String senderName,
-                                String receiverRole,
-                                String receiverName,
-                                String content) {
-        // Persist only (chat flow is Viewer <-> Backend, not via Windows agent)
+    public ChatMessage sendChatMessage(String roomId,
+                                       String senderRole,
+                                       String senderName,
+                                       String receiverRole,
+                                       String receiverName,
+                                       String content) {
         ChatMessage saved = saveMessage(roomId, senderRole, senderName, receiverRole, receiverName, content);
         saved.setDelivered(true);
-        chatMessageRepository.save(saved);
+        return chatMessageRepository.save(saved);
     }
 
     public List<ChatMessage> getPendingMessages(String roomId) {

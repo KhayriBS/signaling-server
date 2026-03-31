@@ -6,6 +6,7 @@ import com.lumiere.transport.remoteitsupportserver.chat.entity.ChatMessage;
 import com.lumiere.transport.remoteitsupportserver.chat.service.ChatService;
 import com.lumiere.transport.remoteitsupportserver.common.dto.ApiResponse;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -15,9 +16,12 @@ import java.util.stream.Collectors;
 @RequestMapping("/chat")
 public class ChatController {
     private final ChatService chatService;
+    private final SimpMessagingTemplate messagingTemplate;
 
-    public ChatController(ChatService chatService) {
+    public ChatController(ChatService chatService,
+                          SimpMessagingTemplate messagingTemplate) {
         this.chatService = chatService;
+        this.messagingTemplate = messagingTemplate;
     }
 
     @PostMapping("/send/{roomId}")
@@ -32,7 +36,7 @@ public class ChatController {
                 ? "Utilisateur"
                 : request.getSenderName();
 
-        chatService.sendChatMessage(
+        ChatMessage saved = chatService.sendChatMessage(
             roomId,
             senderRole,
             senderName,
@@ -40,8 +44,11 @@ public class ChatController {
             request.getReceiverName(),
             request.getContent()
         );
+
+        ChatMessageDto dto = toDto(saved);
+        messagingTemplate.convertAndSend("/topic/chat/" + roomId, dto);
         
-        return ResponseEntity.ok(ApiResponse.success(null));
+        return ResponseEntity.ok(ApiResponse.success(dto));
     }
 
     @GetMapping("/messages/{roomId}")
