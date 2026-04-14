@@ -68,6 +68,10 @@ public class AgentPresenceService {
         return jwtProvider.generateTokenAgent(saved);
     }
     public List<Agent> getAllAgents(Authentication authentication) {
+        if (authentication == null) {
+            return agentRepository.findAll();
+        }
+
         if (isAdmin(authentication)) {
             return agentRepository.findAll();
         }
@@ -75,6 +79,10 @@ public class AgentPresenceService {
     }
 
     public List<Agent> getOnlineAgents(Authentication authentication) {
+        if (authentication == null) {
+            return agentRepository.findByStatus(AgentStatus.ONLINE);
+        }
+
         if (isAdmin(authentication)) {
             return agentRepository.findByStatus(AgentStatus.ONLINE);
         }

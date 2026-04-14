@@ -32,8 +32,18 @@ public class SessionService {
         var agent = agentRepository.findByMachineId(machineId)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + machineId));
 
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+        boolean isAdmin = authentication != null
+            && authentication.getAuthorities().stream()
+            .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+
+        // Legacy auth-only flow kept for reference:
+        // boolean isAdmin = authentication.getAuthorities().stream()
+        //         .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+
+        if (authentication == null) {
+            String technicianName = "guest-" + machineId;
+            return createSession(agent, technicianName, "USER", SessionStatus.PENDING_APPROVAL, false, false);
+        }
 
         if (!isAdmin) {
             String assignedUsername = agent.getAssignedUsername();

@@ -40,6 +40,8 @@ public class SecurityConfig {
                         sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**", "/login", "/register", "/ws/**", "/agents/login", "/agents/register").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/agents", "/agents/online").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/sessions/start/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/start-by-code/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/stop-by-token/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/sessions/by-token/**").permitAll()
