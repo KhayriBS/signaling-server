@@ -31,9 +31,4 @@ public class SignalingService {
             rooms.remove(sessionId);
         }
     }
-
-    public boolean isRoomEmpty(String sessionId) {
-        Map<String, WebSocketSession> room = rooms.get(sessionId);
-        return room == null || room.isEmpty();
-    }
 }

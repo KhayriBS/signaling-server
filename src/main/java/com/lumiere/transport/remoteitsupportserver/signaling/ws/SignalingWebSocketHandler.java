@@ -17,27 +17,18 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.ObjectMapper;
 
-import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 @Component
 
 public class SignalingWebSocketHandler extends TextWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(SignalingWebSocketHandler.class);
-    private static final long SESSION_GRACE_PERIOD_SECONDS = 45;
 
     private final SignalingService signalingService;
     private final ControlSessionRepository controlSessionRepository;
     private final SessionService sessionService;
     private final ObjectMapper mapper = new ObjectMapper();
-    private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor();
-    private final Map<String, ScheduledFuture<?>> pendingTerminations = new ConcurrentHashMap<>();
 
     public SignalingWebSocketHandler(SignalingService signalingService,
                                    ControlSessionRepository controlSessionRepository,
@@ -99,8 +90,6 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
                 session
         );
 
-        cancelPendingTermination(String.valueOf(controlSession.getId()));
-
         // Stocker le sessionId dans les attributs de la session WebSocket
         session.getAttributes().put("sessionId", String.valueOf(controlSession.getId()));
         session.getAttributes().put("role", role);
@@ -141,7 +130,7 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
         if (sessionId != null) {
             notifyAndClosePeer(sessionId, role);
             signalingService.remove(sessionId, session);
-            scheduleTerminationIfRoomEmpty(sessionId);
+            terminateSession(sessionId);
         }
     }
 
@@ -152,7 +141,7 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
         if (sessionId != null) {
             notifyAndClosePeer(sessionId, role);
             signalingService.remove(sessionId, session);
-            scheduleTerminationIfRoomEmpty(sessionId);
+            terminateSession(sessionId);
         }
     }
 
@@ -167,40 +156,11 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
                 leave.setTo(peerRole);
                 leave.setPayload(Map.of("reason", "peer_disconnected"));
                 peer.sendMessage(new TextMessage(mapper.writeValueAsString(leave)));
+                peer.close(CloseStatus.NORMAL);
             }
         } catch (Exception ex) {
             log.debug("Failed to notify/close peer for session {}: {}", sessionId, ex.getMessage());
         }
-    }
-
-    private void scheduleTerminationIfRoomEmpty(String sessionId) {
-        if (!signalingService.isRoomEmpty(sessionId)) {
-            return;
-        }
-        cancelPendingTermination(sessionId);
-        ScheduledFuture<?> future = graceScheduler.schedule(() -> terminateSessionIfStillEmpty(sessionId),
-                SESSION_GRACE_PERIOD_SECONDS,
-                TimeUnit.SECONDS);
-        pendingTerminations.put(sessionId, future);
-    }
-
-    private void terminateSessionIfStillEmpty(String sessionId) {
-        pendingTerminations.remove(sessionId);
-        if (signalingService.isRoomEmpty(sessionId)) {
-            terminateSession(sessionId);
-        }
-    }
-
-    private void cancelPendingTermination(String sessionId) {
-        ScheduledFuture<?> pending = pendingTerminations.remove(sessionId);
-        if (pending != null) {
-            pending.cancel(false);
-        }
-    }
-
-    @PreDestroy
-    public void shutdownGraceScheduler() {
-        graceScheduler.shutdownNow();
     }
 
     private void terminateSession(String sessionId) {
