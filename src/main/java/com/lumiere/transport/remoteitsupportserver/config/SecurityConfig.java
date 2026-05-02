@@ -49,6 +49,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/sessions/approval-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/approve-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/reject-public/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/sessions/history/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/agents/*/assign/*", "/agents/*/unassign").hasRole("ADMIN")
                         .requestMatchers("/agents/heartbeat", "/agents/offline", "/agents/metrics").hasRole("AGENT")
                         .requestMatchers("/sessions/pending/**").hasRole("AGENT")

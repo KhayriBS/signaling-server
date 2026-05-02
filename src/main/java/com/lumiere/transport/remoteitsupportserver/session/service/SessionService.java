@@ -6,12 +6,14 @@ import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentReposit
 import com.lumiere.transport.remoteitsupportserver.session.entity.ControlSession;
 import com.lumiere.transport.remoteitsupportserver.session.entity.SessionStatus;
 import com.lumiere.transport.remoteitsupportserver.session.entity.SessionToken;
+import com.lumiere.transport.remoteitsupportserver.session.model.SessionHistoryEntry;
 import com.lumiere.transport.remoteitsupportserver.session.repository.ControlSessionRepository;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -239,5 +241,70 @@ public class SessionService {
         if (assignedUsername == null || !assignedUsername.equals(currentUsername)) {
             throw new AccessDeniedException("Machine is not assigned to current user");
         }
+    }
+
+    /**
+     * Historique des sessions liées à une machine donnée.
+     *
+     * @param machineId  identifiant de la machine (agent OU technicien initiateur)
+     * @param direction  "incoming" (machine = agent), "outgoing" (machine = technicien),
+     *                   ou null/blank/"all" pour les deux côtés
+     * @param status     "ACTIVE", "PENDING_APPROVAL", "TERMINATED", "active" (= ACTIVE+PENDING),
+     *                   "ended" (= TERMINATED), ou null/blank/"all"
+     * @param search     sous-chaîne de recherche (machineId / technicien / token), case-insensitive
+     */
+    public List<SessionHistoryEntry> getSessionHistory(
+            String machineId,
+            String direction,
+            String status,
+            String search
+    ) {
+        if (machineId == null || machineId.isBlank()) {
+            throw new IllegalArgumentException("machineId is required");
+        }
+
+        String normalizedDirection = normalizeDirection(direction);
+        List<SessionStatus> statuses = resolveStatusFilter(status);
+        String normalizedSearch = (search == null) ? null : search.trim();
+        if (normalizedSearch != null && normalizedSearch.isEmpty()) {
+            normalizedSearch = null;
+        }
+
+        return sessionRepository
+                .findHistoryForMachine(machineId, normalizedDirection, statuses, normalizedSearch)
+                .stream()
+                .map(s -> SessionHistoryEntry.fromEntity(s, machineId))
+                .toList();
+    }
+
+    private String normalizeDirection(String direction) {
+        if (direction == null) return null;
+        String trimmed = direction.trim().toLowerCase();
+        return switch (trimmed) {
+            case "incoming", "entrante", "entrantes" -> "incoming";
+            case "outgoing", "sortante", "sortantes" -> "outgoing";
+            case "", "all", "tous", "tout" -> null;
+            default -> null;
+        };
+    }
+
+    private List<SessionStatus> resolveStatusFilter(String status) {
+        if (status == null) return null;
+        String trimmed = status.trim().toLowerCase();
+        return switch (trimmed) {
+            case "", "all", "tous" -> null;
+            case "active", "en_cours", "en-cours", "in_progress", "running" ->
+                    Arrays.asList(SessionStatus.ACTIVE, SessionStatus.PENDING_APPROVAL);
+            case "ended", "terminated", "terminee", "terminees", "terminée", "terminées" ->
+                    List.of(SessionStatus.TERMINATED);
+            case "pending", "pending_approval" -> List.of(SessionStatus.PENDING_APPROVAL);
+            default -> {
+                try {
+                    yield List.of(SessionStatus.valueOf(status.trim().toUpperCase()));
+                } catch (IllegalArgumentException e) {
+                    yield null;
+                }
+            }
+        };
     }
 }

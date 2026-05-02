@@ -3,6 +3,7 @@ package com.lumiere.transport.remoteitsupportserver.session.controller;
 import com.lumiere.transport.remoteitsupportserver.common.dto.ApiResponse;
 import com.lumiere.transport.remoteitsupportserver.session.entity.ControlSession;
 import com.lumiere.transport.remoteitsupportserver.session.model.ApprovalDecisionRequest;
+import com.lumiere.transport.remoteitsupportserver.session.model.SessionHistoryEntry;
 import com.lumiere.transport.remoteitsupportserver.session.service.SessionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -11,7 +12,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/sessions")
@@ -142,5 +146,28 @@ public class SessionController {
         return sessionService.getActiveSessionForAgent(machineId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.noContent().build());
+    }
+
+    /**
+     * Historique des sessions impliquant une machine donnée (côté agent OU côté technicien).
+     *
+     * Filtres :
+     *  - direction : "incoming" / "outgoing" / "all" (défaut "all")
+     *  - status    : "active" (= ACTIVE+PENDING_APPROVAL) / "ended" (= TERMINATED) / "all"
+     *                ou directement "ACTIVE" / "PENDING_APPROVAL" / "TERMINATED"
+     *  - q         : sous-chaîne libre cherchée dans agentMachineId, technicianUsername, signalingToken
+     *
+     * Exemple : GET /sessions/history/DESKTOP-A4B2C9?direction=outgoing&amp;status=ended&amp;q=LAPTOP
+     */
+    @GetMapping("/history/{machineId}")
+    public ApiResponse<List<SessionHistoryEntry>> getSessionHistory(
+            @PathVariable String machineId,
+            @RequestParam(name = "direction", required = false) String direction,
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "q", required = false) String search) {
+
+        return ApiResponse.success(
+                sessionService.getSessionHistory(machineId, direction, status, search)
+        );
     }
 }
