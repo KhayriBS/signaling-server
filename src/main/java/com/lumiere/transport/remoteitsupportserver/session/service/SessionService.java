@@ -246,7 +246,12 @@ public class SessionService {
     /**
      * Historique des sessions liées à une machine donnée.
      *
-     * @param machineId  identifiant de la machine (agent OU technicien initiateur)
+     * @param key        identifiant de la machine — soit le {@code machineId}
+     *                   (hostname-like, ex. "DESKTOP-A4B2C9"), soit le
+     *                   {@code connectionCode} à 6 chiffres (ex. "560687").
+     *                   Si c'est un code 6 chiffres, il est résolu via
+     *                   {@link AgentRepository#findByConnectionCode} pour obtenir
+     *                   le machineId réel.
      * @param direction  "incoming" (machine = agent), "outgoing" (machine = technicien),
      *                   ou null/blank/"all" pour les deux côtés
      * @param status     "ACTIVE", "PENDING_APPROVAL", "TERMINATED", "active" (= ACTIVE+PENDING),
@@ -254,13 +259,23 @@ public class SessionService {
      * @param search     sous-chaîne de recherche (machineId / technicien / token), case-insensitive
      */
     public List<SessionHistoryEntry> getSessionHistory(
-            String machineId,
+            String key,
             String direction,
             String status,
             String search
     ) {
-        if (machineId == null || machineId.isBlank()) {
-            throw new IllegalArgumentException("machineId is required");
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("machineId or connectionCode is required");
+        }
+
+        // Si l'entrée ressemble à un connection_code (6 chiffres), on la résout
+        // d'abord en machineId via la table agents.
+        String resolvedMachineId = key.trim();
+        if (resolvedMachineId.matches("\\d{6}")) {
+            resolvedMachineId = agentRepository.findByConnectionCode(resolvedMachineId)
+                    .map(Agent::getMachineId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "No agent found for connection code: " + key));
         }
 
         String normalizedDirection = normalizeDirection(direction);
@@ -270,10 +285,11 @@ public class SessionService {
             normalizedSearch = null;
         }
 
+        final String finalMachineId = resolvedMachineId;
         return sessionRepository
-                .findHistoryForMachine(machineId, normalizedDirection, statuses, normalizedSearch)
+                .findHistoryForMachine(finalMachineId, normalizedDirection, statuses, normalizedSearch)
                 .stream()
-                .map(s -> SessionHistoryEntry.fromEntity(s, machineId))
+                .map(s -> SessionHistoryEntry.fromEntity(s, finalMachineId))
                 .toList();
     }
 

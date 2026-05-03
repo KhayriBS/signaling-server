@@ -12,6 +12,10 @@ import java.time.Instant;
  * Le champ {@code direction} est calculé en fonction de la machine appelante :
  * "incoming" si la session vise cette machine comme agent, "outgoing" si la
  * machine est l'initiatrice (technicianUsername == machineId).
+ *
+ * {@code peerLabel} est l'identifiant de l'AUTRE PC (à afficher dans la carte) :
+ *   - direction "incoming"  → technicianUsername (le demandeur)
+ *   - direction "outgoing"  → agentMachineId    (la cible)
  */
 public record SessionHistoryEntry(
         Long id,
@@ -20,6 +24,7 @@ public record SessionHistoryEntry(
         String technicianRole,
         SessionStatus status,
         String direction,
+        String peerLabel,
         Instant startedAt,
         Instant endedAt,
         Long durationMs
@@ -33,6 +38,10 @@ public record SessionHistoryEntry(
         } else {
             direction = "incoming";
         }
+
+        String peerLabel = "incoming".equals(direction)
+                ? session.getTechnicianUsername()
+                : session.getAgentMachineId();
 
         Long durationMs = null;
         Instant start = session.getStartedAt();
@@ -48,6 +57,7 @@ public record SessionHistoryEntry(
                 session.getTechnicianRole(),
                 session.getStatus(),
                 direction,
+                peerLabel,
                 start,
                 end,
                 durationMs

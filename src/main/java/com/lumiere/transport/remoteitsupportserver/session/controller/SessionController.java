@@ -151,23 +151,29 @@ public class SessionController {
     /**
      * Historique des sessions impliquant une machine donnée (côté agent OU côté technicien).
      *
+     * Le {@code key} peut être soit le {@code machineId} (ex. "DESKTOP-A4B2C9"),
+     * soit le {@code connectionCode} à 6 chiffres (ex. "560687") — auquel cas
+     * il est résolu en interne vers le machineId via la table agents.
+     *
      * Filtres :
      *  - direction : "incoming" / "outgoing" / "all" (défaut "all")
      *  - status    : "active" (= ACTIVE+PENDING_APPROVAL) / "ended" (= TERMINATED) / "all"
      *                ou directement "ACTIVE" / "PENDING_APPROVAL" / "TERMINATED"
      *  - q         : sous-chaîne libre cherchée dans agentMachineId, technicianUsername, signalingToken
      *
-     * Exemple : GET /sessions/history/DESKTOP-A4B2C9?direction=outgoing&amp;status=ended&amp;q=LAPTOP
+     * Exemples :
+     *   GET /sessions/history/DESKTOP-A4B2C9?direction=outgoing&amp;status=ended&amp;q=LAPTOP
+     *   GET /sessions/history/560687?direction=incoming&amp;status=active
      */
-    @GetMapping("/history/{machineId}")
+    @GetMapping("/history/{key}")
     public ApiResponse<List<SessionHistoryEntry>> getSessionHistory(
-            @PathVariable String machineId,
+            @PathVariable String key,
             @RequestParam(name = "direction", required = false) String direction,
             @RequestParam(name = "status", required = false) String status,
             @RequestParam(name = "q", required = false) String search) {
 
         return ApiResponse.success(
-                sessionService.getSessionHistory(machineId, direction, status, search)
+                sessionService.getSessionHistory(key, direction, status, search)
         );
     }
 }
