@@ -128,9 +128,20 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
         String sessionId = (String) session.getAttributes().get("sessionId");
         String role = (String) session.getAttributes().get("role");
         if (sessionId != null) {
-            notifyAndClosePeer(sessionId, role);
+            // IMPORTANT : la fermeture d'une WS signaling NE doit PAS terminer
+            // la session ni couper le peer. Sur Render free-tier la WS se
+            // ferme en 1003/1011 quelques secondes après l'OFFER/ANSWER, mais
+            // le pipe WebRTC P2P (vidéo, DataChannels) reste totalement
+            // fonctionnel sans signaling. On retire juste la WS du registry
+            // pour permettre une reconnexion ultérieure (chat, ICE restart).
+            //
+            // Une session ne se termine plus que via :
+            //   - POST /sessions/stop/{id}
+            //   - POST /sessions/stop-by-token/{token}
+            //   - LEAVE explicite reçu en cours de message handling
+            log.debug("Signaling WS closed for session {} role {} (peer kept alive)",
+                    sessionId, role);
             signalingService.remove(sessionId, session);
-            terminateSession(sessionId);
         }
     }
 
@@ -139,39 +150,9 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
         String sessionId = (String) session.getAttributes().get("sessionId");
         String role = (String) session.getAttributes().get("role");
         if (sessionId != null) {
-            notifyAndClosePeer(sessionId, role);
+            log.debug("Signaling WS transport error for session {} role {}: {}",
+                    sessionId, role, exception.getMessage());
             signalingService.remove(sessionId, session);
-            terminateSession(sessionId);
-        }
-    }
-
-    private void notifyAndClosePeer(String sessionId, String role) {
-        try {
-            String peerRole = "agent".equals(role) ? "viewer" : "agent";
-            WebSocketSession peer = signalingService.getPeer(sessionId, peerRole);
-            if (peer != null && peer.isOpen()) {
-                SignalMessage leave = new SignalMessage();
-                leave.setType(SignalType.LEAVE);
-                leave.setFrom(role == null ? "unknown" : role);
-                leave.setTo(peerRole);
-                leave.setPayload(Map.of("reason", "peer_disconnected"));
-                peer.sendMessage(new TextMessage(mapper.writeValueAsString(leave)));
-                peer.close(CloseStatus.NORMAL);
-            }
-        } catch (Exception ex) {
-            log.debug("Failed to notify/close peer for session {}: {}", sessionId, ex.getMessage());
-        }
-    }
-
-    private void terminateSession(String sessionId) {
-        try {
-            Long id = Long.parseLong(sessionId);
-            ControlSession current = controlSessionRepository.findById(id).orElse(null);
-            if (current != null && current.getStatus() == SessionStatus.ACTIVE) {
-                sessionService.stopSession(id);
-            }
-        } catch (Exception ex) {
-            log.warn("Unable to terminate session {} on signaling disconnect: {}", sessionId, ex.getMessage());
         }
     }
 
