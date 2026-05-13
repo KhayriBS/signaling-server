@@ -5,13 +5,19 @@ import com.lumiere.transport.remoteitsupportserver.ai.dto.AiFrameRequest;
 import com.lumiere.transport.remoteitsupportserver.ai.service.AiAgentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.ResponseBody;
 
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -149,6 +155,101 @@ public class AiController {
                     log.info("[ai] [{}] ▶ sending actions to /user/queue/ai/actions", stompSessionId);
                     sendToUser(stompSessionId, envelope);
                 });
+    }
+
+    /**
+     * Alternative REST a {@link #onFrame} pour les payloads volumineux. Le frame
+     * IA (screenshot ~95 KB base64 + JSON wrapper) peut etre jete par certains
+     * proxys WebSocket (Render free-tier notamment) — passer en HTTP POST evite
+     * la limite de taille des frames STOMP / SockJS.
+     *
+     * La reponse Gemini arrive toujours via STOMP sur {@code /topic/ai/<sessionId>}
+     * (et /user/queue/ai/actions en duplicate) — le client doit etre abonne AVANT
+     * d'envoyer le POST.
+     *
+     * Repond immediatement avec {@code accepted:true, requestId:...} et lance
+     * l'analyse Gemini en arriere-plan. Le client n'a qu'a attendre l'envelope
+     * STOMP retour.
+     */
+    @PostMapping("/ai/frame")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> postFrame(@RequestBody AiFrameRequest payload) {
+        String requestId = UUID.randomUUID().toString();
+
+        if (payload == null) {
+            log.warn("[ai] [REST/{}] payload null", requestId);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "accepted", false,
+                    "requestId", requestId,
+                    "error", "Empty payload"
+            ));
+        }
+        if (payload.sessionId() == null || payload.sessionId().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "accepted", false,
+                    "requestId", requestId,
+                    "error", "sessionId required (used as STOMP topic key)"
+            ));
+        }
+
+        long tReceived = System.currentTimeMillis();
+        int screenshotBytes = payload.screenshot() == null ? 0 : payload.screenshot().length();
+        log.info("[ai] [REST/{}] ◀ FRAME received | sessionId={} | cmd=\"{}\" | screenshot={} chars ({}x{})",
+                requestId,
+                payload.sessionId(),
+                truncate(payload.command(), 100),
+                screenshotBytes,
+                payload.frameWidth(),
+                payload.frameHeight()
+        );
+
+        // ─── Pipeline async, identique a onFrame() ──────────────────────
+        // La reponse part SEULEMENT sur /topic/ai/<sessionId> car on n'a
+        // pas de simpSessionId STOMP ici (REST decouple du WebSocket).
+        CompletableFuture
+                .supplyAsync(() -> {
+                    log.info("[ai] [REST/{}] → calling Gemini (model=gemini-2.5-flash)", requestId);
+                    return aiAgentService.analyse(payload);
+                }, aiExecutor)
+                .orTimeout(AI_PIPELINE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((envelope, throwable) -> {
+                    long elapsed = System.currentTimeMillis() - tReceived;
+                    if (throwable instanceof TimeoutException) {
+                        log.warn("[ai] [REST/{}] ✖ TIMEOUT after {}ms (limit={}s)",
+                                requestId, elapsed, AI_PIPELINE_TIMEOUT_SECONDS);
+                        publishToTopic("REST/" + requestId,
+                                AiActionEnvelope.error(payload.sessionId(), payload.command(),
+                                        "Gemini timeout (>" + AI_PIPELINE_TIMEOUT_SECONDS + "s)"));
+                        return;
+                    }
+                    if (throwable != null) {
+                        Throwable cause = throwable.getCause() != null ? throwable.getCause() : throwable;
+                        log.error("[ai] [REST/{}] ✖ pipeline error after {}ms: {}",
+                                requestId, elapsed, cause.toString(), cause);
+                        publishToTopic("REST/" + requestId,
+                                AiActionEnvelope.error(payload.sessionId(), payload.command(),
+                                        "Internal error: " + cause.getClass().getSimpleName()));
+                        return;
+                    }
+                    int actionCount = envelope.actions() == null ? 0 : envelope.actions().size();
+                    log.info("[ai] [REST/{}] ◀ Gemini response | status={} | actions={} | rationale=\"{}\" | total {}ms",
+                            requestId,
+                            envelope.status(),
+                            actionCount,
+                            truncate(envelope.rationale(), 100),
+                            elapsed
+                    );
+                    log.info("[ai] [REST/{}] ▶ publishing to /topic/ai/{}",
+                            requestId, payload.sessionId());
+                    publishToTopic("REST/" + requestId, envelope);
+                });
+
+        return ResponseEntity.ok(Map.of(
+                "accepted", true,
+                "requestId", requestId,
+                "sessionId", payload.sessionId(),
+                "responseChannel", "/topic/ai/" + payload.sessionId()
+        ));
     }
 
     /**

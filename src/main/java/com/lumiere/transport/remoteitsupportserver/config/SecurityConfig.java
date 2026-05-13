@@ -46,6 +46,11 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/sessions/stop-by-token/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/sessions/by-token/**").permitAll()
                         .requestMatchers("/chat/**").permitAll()
+                        // Endpoint REST IA — alternative au STOMP /app/ai/frame pour les
+                        // payloads volumineux (screenshot ~95 KB+ jeté par certains proxys
+                        // WebSocket dont Render free-tier). La reponse arrive toujours par
+                        // STOMP /topic/ai/<sessionId>.
+                        .requestMatchers(HttpMethod.POST, "/ai/frame").permitAll()
                         .requestMatchers(HttpMethod.GET, "/sessions/approval-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/approve-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/reject-public/**").permitAll()
