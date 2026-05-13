@@ -152,65 +152,78 @@ public class AiController {
     }
 
     /**
-     * Envoie a la session STOMP donnee en faisant croire a Spring que cette
-     * session est aussi un "user" (le UserDestinationResolver accepte un
-     * sessionId nu comme cle d'user quand aucun Principal n'est attache).
+     * Envoie le resultat IA au client via DEUX canaux paralleles :
+     *
+     *   1. /user/queue/ai/actions   (resolution user-destination Spring)
+     *   2. /topic/ai/<sessionId>    (broadcast topic — voie robuste, pas de
+     *                                resolution magique a faire)
+     *
+     * Le double envoi sert de garde-fou : si la voie 1 echoue silencieusement
+     * (probleme de Principal/Authentication, race sur le simpSessionId, etc.),
+     * la voie 2 delivre quand meme. Le client doit dedupliquer cote front
+     * (mais c'est une boucle infiniment plus simple a debugger qu'un message
+     * jamais arrive).
      */
     private void sendToUser(String stompSessionId, AiActionEnvelope envelope) {
-        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
-        headers.setSessionId(stompSessionId);
-        headers.setLeaveMutable(true);
-
-        try {
-            messagingTemplate.convertAndSendToUser(
-                    stompSessionId,
-                    USER_ACTIONS_DESTINATION,
-                    envelope,
-                    headers.getMessageHeaders()
-            );
-        } catch (Exception ex) {
-            log.warn("[ai] [{}] failed to send actions to user-destination: {}",
-                    stompSessionId, ex.getMessage());
-        }
+        publishBothChannels(stompSessionId, envelope, USER_ACTIONS_DESTINATION);
     }
 
     /**
-     * Envoie une erreur cote serveur (timeout, exception inattendue, payload
-     * invalide). Pousse en parallele sur /queue/ai/error (canal dedie) ET
-     * sur /queue/ai/actions sous forme d'envelope error, pour que le front
-     * recoive l'erreur quel que soit le subscribe choisi.
+     * Envoie une erreur via deux canaux paralleles :
+     *
+     *   1. /user/queue/ai/error     (canal dedie aux erreurs)
+     *   2. /user/queue/ai/actions   (canal principal — pour les clients qui
+     *                                n'ecoutent que celui-ci)
+     *   3. /topic/ai/<sessionId>    (topic robuste, garde-fou)
      */
     private void sendError(String stompSessionId, String sessionId, String command, String message) {
+        var errorEnvelope = AiActionEnvelope.error(sessionId, command, message);
+
+        // Voie /user/queue/ai/error
+        publishToUserDestination(stompSessionId, errorEnvelope, USER_ERROR_DESTINATION);
+        // + Voies /user/queue/ai/actions ET /topic/ai/<sessionId>
+        publishBothChannels(stompSessionId, errorEnvelope, USER_ACTIONS_DESTINATION);
+    }
+
+    private void publishBothChannels(String stompSessionId, AiActionEnvelope envelope,
+                                     String userDestination) {
+        publishToUserDestination(stompSessionId, envelope, userDestination);
+        publishToTopic(stompSessionId, envelope);
+    }
+
+    private void publishToUserDestination(String stompSessionId, AiActionEnvelope envelope,
+                                          String userDestination) {
         SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
         headers.setSessionId(stompSessionId);
         headers.setLeaveMutable(true);
-
-        var errorEnvelope = AiActionEnvelope.error(sessionId, command, message);
-
-        // 1) Canal dedie pour les erreurs (le front peut afficher banner/toast).
         try {
             messagingTemplate.convertAndSendToUser(
                     stompSessionId,
-                    USER_ERROR_DESTINATION,
-                    errorEnvelope,
+                    userDestination,
+                    envelope,
                     headers.getMessageHeaders()
             );
+            log.info("[ai] [{}] ▶ published to /user{}", stompSessionId, userDestination);
         } catch (Exception ex) {
-            log.warn("[ai] [{}] failed to send to {}: {}",
-                    stompSessionId, USER_ERROR_DESTINATION, ex.getMessage());
+            log.warn("[ai] [{}] failed user-destination {}: {}",
+                    stompSessionId, userDestination, ex.getMessage());
         }
+    }
 
-        // 2) Canal actions habituel — pour les fronts qui n'ecoutent QUE celui-ci.
+    private void publishToTopic(String stompSessionId, AiActionEnvelope envelope) {
+        String sid = envelope.sessionId();
+        if (sid == null || sid.isBlank()) {
+            log.warn("[ai] [{}] cannot publish to topic — envelope has no sessionId",
+                    stompSessionId);
+            return;
+        }
+        String topic = "/topic/ai/" + sid;
         try {
-            messagingTemplate.convertAndSendToUser(
-                    stompSessionId,
-                    USER_ACTIONS_DESTINATION,
-                    errorEnvelope,
-                    headers.getMessageHeaders()
-            );
+            messagingTemplate.convertAndSend(topic, envelope);
+            log.info("[ai] [{}] ▶ published to {}", stompSessionId, topic);
         } catch (Exception ex) {
-            log.warn("[ai] [{}] failed to send error fallback to {}: {}",
-                    stompSessionId, USER_ACTIONS_DESTINATION, ex.getMessage());
+            log.warn("[ai] [{}] failed topic {}: {}",
+                    stompSessionId, topic, ex.getMessage());
         }
     }
 
