@@ -131,38 +131,76 @@ public class AiAgentService {
                     "Gemini API key not configured (gemini.api.key)", t0);
         }
 
-        // Appel HTTP
-        String rawResponseText;
+        // Appel HTTP — avec un retry unique sur 429 (rate limit) apres 4s,
+        // car le quota free-tier Gemini est tres bas (~10 req/min) et un seul
+        // burst utilisateur peut declencher un 429 transitoire.
+        String body;
         try {
-            String body = buildGeminiPayload(req);
-            String response = httpClient.post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/{model}:generateContent")
-                            .queryParam("key", geminiApiKey)
-                            .build(GEMINI_MODEL))
-                    .header("Content-Type", "application/json")
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            if (response == null) {
-                return persistAndReturn(req, null, "error", "Empty response from Gemini", t0);
-            }
-            rawResponseText = extractText(response);
-        } catch (HttpStatusCodeException ex) {
-            HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
-            String msg = "Gemini HTTP " + ex.getStatusCode().value()
-                    + (status != null ? " (" + status.getReasonPhrase() + ")" : "")
-                    + ": " + truncate(ex.getResponseBodyAsString(), 400);
-            log.warn("Gemini call failed: {}", msg);
-            return persistAndReturn(req, null, "error", msg, t0);
-        } catch (ResourceAccessException ex) {
-            log.warn("Gemini timeout / network error: {}", ex.getMessage());
-            return persistAndReturn(req, null, "error",
-                    "Gemini timeout/network: " + ex.getMessage(), t0);
+            body = buildGeminiPayload(req);
         } catch (Exception ex) {
-            log.warn("Unexpected error during Gemini call", ex);
             return persistAndReturn(req, null, "error",
-                    "Unexpected: " + ex.getClass().getSimpleName() + " — " + ex.getMessage(), t0);
+                    "Failed to build Gemini payload: " + ex.getMessage(), t0);
+        }
+
+        String rawResponseText = null;
+        String lastError = null;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                String response = httpClient.post()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/{model}:generateContent")
+                                .queryParam("key", geminiApiKey)
+                                .build(GEMINI_MODEL))
+                        .header("Content-Type", "application/json")
+                        .body(body)
+                        .retrieve()
+                        .body(String.class);
+                if (response == null) {
+                    lastError = "Empty response from Gemini";
+                    break;
+                }
+                rawResponseText = extractText(response);
+                lastError = null;
+                break;
+            } catch (HttpStatusCodeException ex) {
+                int code = ex.getStatusCode().value();
+                String bodyExcerpt = truncate(ex.getResponseBodyAsString(), 400);
+
+                if (code == 429 && attempt == 1) {
+                    // Rate-limit transitoire — extrait le retry-after suggere par
+                    // l'API si present, sinon fallback 4s.
+                    long backoffMs = parseGeminiRetryDelayMs(ex.getResponseBodyAsString())
+                            .orElse(4_000L);
+                    backoffMs = Math.min(backoffMs, 8_000L); // cap a 8s, on ne veut pas
+                                                              // bloquer le pool indefiniment
+                    log.info("Gemini 429 received, retrying after {}ms (attempt {})", backoffMs, attempt);
+                    try {
+                        Thread.sleep(backoffMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        lastError = "Interrupted during 429 backoff";
+                        break;
+                    }
+                    continue;
+                }
+
+                lastError = formatHttpError(code, bodyExcerpt);
+                log.warn("Gemini HTTP {} (attempt {}): {}", code, attempt, bodyExcerpt);
+                break;
+            } catch (ResourceAccessException ex) {
+                log.warn("Gemini timeout / network error: {}", ex.getMessage());
+                lastError = "Gemini timeout/network: " + ex.getMessage();
+                break;
+            } catch (Exception ex) {
+                log.warn("Unexpected error during Gemini call", ex);
+                lastError = "Unexpected: " + ex.getClass().getSimpleName() + " — " + ex.getMessage();
+                break;
+            }
+        }
+
+        if (rawResponseText == null) {
+            return persistAndReturn(req, null, "error",
+                    lastError == null ? "Unknown Gemini error" : lastError, t0);
         }
 
         // Parse JSON de Gemini
@@ -398,6 +436,59 @@ public class AiAgentService {
         if (s == null) return null;
         if (s.length() <= max) return s;
         return s.substring(0, max) + "…";
+    }
+
+    /**
+     * Formate un code HTTP Gemini en message lisible pour le technicien.
+     * Cas particulier : 429 (rate limit) — message court et actionnable.
+     */
+    private static String formatHttpError(int code, String bodyExcerpt) {
+        if (code == 429) {
+            // Cas le plus frequent en free-tier : "Quota IA depasse, attends ~30s."
+            return "Quota IA depasse (HTTP 429). Free-tier Gemini = ~10 req/min. "
+                    + "Attends 30-60s et reessaie, ou passe en tier paye.";
+        }
+        if (code == 401 || code == 403) {
+            return "Cle Gemini invalide ou desactivee (HTTP " + code + "). Verifie gemini.api.key dans application.properties.";
+        }
+        if (code == 400) {
+            return "Requete IA mal formee (HTTP 400) : " + bodyExcerpt;
+        }
+        if (code >= 500) {
+            return "Gemini indisponible (HTTP " + code + "). Reessaie dans quelques secondes.";
+        }
+        HttpStatus status = HttpStatus.resolve(code);
+        return "Gemini HTTP " + code
+                + (status != null ? " (" + status.getReasonPhrase() + ")" : "")
+                + ": " + bodyExcerpt;
+    }
+
+    /**
+     * Tente d'extraire un delai de retry du body JSON d'un 429 Gemini.
+     * L'API renvoie un champ {@code retryDelay} dans le {@code RetryInfo} dans
+     * {@code error.details}. Format : "30s" → 30000 ms.
+     */
+    private java.util.Optional<Long> parseGeminiRetryDelayMs(String body) {
+        if (body == null || body.isBlank()) return java.util.Optional.empty();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode details = root.path("error").path("details");
+            if (!details.isArray()) return java.util.Optional.empty();
+            for (JsonNode d : details) {
+                String delay = d.path("retryDelay").asString("");
+                if (!delay.isBlank()) {
+                    // Format "30s" / "1.5s" — on extrait les chiffres + .
+                    String num = delay.replaceAll("[^0-9.]", "");
+                    if (!num.isBlank()) {
+                        double seconds = Double.parseDouble(num);
+                        return java.util.Optional.of((long) (seconds * 1000));
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // best-effort
+        }
+        return java.util.Optional.empty();
     }
 
     // ── Persistance ──────────────────────────────────────────────────────────
