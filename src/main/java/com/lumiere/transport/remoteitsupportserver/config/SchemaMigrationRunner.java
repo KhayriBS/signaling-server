@@ -20,6 +20,35 @@ public class SchemaMigrationRunner implements CommandLineRunner {
     public void run(String... args) {
         migrateControlSessionsStatus();
         migrateChatMessagesRoomId();
+        ensureAiSessionsTable();
+    }
+
+    /**
+     * Cree la table ai_sessions si elle n'existe pas. Sert de filet de
+     * securite quand spring.jpa.hibernate.ddl-auto est en "none"/"validate"
+     * (prod hardenee). Reflete db/migration/V1__create_ai_sessions.sql.
+     */
+    private void ensureAiSessionsTable() {
+        try {
+            jdbcTemplate.execute("""
+                    CREATE TABLE IF NOT EXISTS ai_sessions (
+                        id              BIGINT       NOT NULL AUTO_INCREMENT,
+                        session_id      VARCHAR(64)  NOT NULL,
+                        admin_user      VARCHAR(128) NULL,
+                        command         VARCHAR(2000) NOT NULL,
+                        actions_json    TEXT         NULL,
+                        status          VARCHAR(16)  NOT NULL,
+                        error_message   VARCHAR(1000) NULL,
+                        latency_ms      BIGINT       NULL,
+                        created_at      DATETIME(6)  NOT NULL,
+                        PRIMARY KEY (id),
+                        KEY idx_ai_sessions_session_id (session_id),
+                        KEY idx_ai_sessions_created_at (created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """);
+        } catch (Exception e) {
+            log.warn("Failed to ensure ai_sessions table: {}", e.getMessage());
+        }
     }
 
     private void migrateControlSessionsStatus() {
