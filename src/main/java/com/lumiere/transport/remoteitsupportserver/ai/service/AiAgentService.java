@@ -145,6 +145,9 @@ public class AiAgentService {
         String rawResponseText = null;
         String lastError = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
+            long tHttpStart = System.currentTimeMillis();
+            log.info("[ai-service] → POST Gemini (attempt {}, screenshot ~{} KB)",
+                    attempt, req.screenshot().length() / 1024);
             try {
                 String response = httpClient.post()
                         .uri(uriBuilder -> uriBuilder
@@ -161,6 +164,10 @@ public class AiAgentService {
                 }
                 rawResponseText = extractText(response);
                 lastError = null;
+                log.info("[ai-service] ◀ Gemini OK in {} ms (response {} chars, parsed text {} chars)",
+                        System.currentTimeMillis() - tHttpStart,
+                        response.length(),
+                        rawResponseText == null ? 0 : rawResponseText.length());
                 break;
             } catch (HttpStatusCodeException ex) {
                 int code = ex.getStatusCode().value();

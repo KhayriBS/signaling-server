@@ -12,8 +12,11 @@ import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 
-import java.util.concurrent.Executor;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Controller STOMP — endpoint unique {@code /app/ai/frame}.
@@ -38,6 +41,21 @@ public class AiController {
     /** Destination relative au user-prefix ("/user" + ce path). */
     private static final String USER_ACTIONS_DESTINATION = "/queue/ai/actions";
 
+    /**
+     * Destination separee pour les erreurs cote serveur (timeout, exception
+     * inattendue, etc.) que le front peut surveiller independamment de
+     * /queue/ai/actions pour declencher une UI specifique (banner / toast).
+     */
+    private static final String USER_ERROR_DESTINATION = "/queue/ai/error";
+
+    /**
+     * Limite stricte sur l'appel IA complet (build payload + Gemini + parse
+     * + persistance). Gemini Flash repond en general en 1-5s mais peut hanger
+     * sur 30s+ en cas de surcharge regionale. Au-dela on rend la main au user
+     * plutot que de garder un thread bloque.
+     */
+    private static final int AI_PIPELINE_TIMEOUT_SECONDS = 30;
+
     private final AiAgentService aiAgentService;
     private final SimpMessagingTemplate messagingTemplate;
 
@@ -45,7 +63,7 @@ public class AiController {
      * Pool dedie — taille bornee pour eviter qu'un burst de commandes IA ne
      * sature la JVM (chaque appel Gemini consomme ~1-2 MB de heap pour le base64).
      */
-    private final Executor aiExecutor = Executors.newFixedThreadPool(4, r -> {
+    private final ExecutorService aiExecutor = Executors.newFixedThreadPool(4, r -> {
         Thread t = new Thread(r, "ai-agent-worker");
         t.setDaemon(true);
         return t;
@@ -62,29 +80,69 @@ public class AiController {
                         SimpMessageHeaderAccessor accessor) {
         String stompSessionId = accessor.getSessionId();
         if (stompSessionId == null) {
-            log.warn("[ai] received /ai/frame without a STOMP session id, dropping");
+            log.warn("[ai] /ai/frame received without STOMP session id, dropping");
             return;
         }
 
-        String preview = payload == null
-                ? "null"
-                : "sessionId=" + payload.sessionId() + ", cmd='" + truncate(payload.command(), 80) + "'";
-        log.info("[ai] frame received from stomp-session={} ({})", stompSessionId, preview);
+        // ─── Reception ────────────────────────────────────────────────────
+        long tReceived = System.currentTimeMillis();
+        if (payload == null) {
+            log.warn("[ai] [{}] /ai/frame received with null payload", stompSessionId);
+            sendError(stompSessionId, null, null, "Empty payload");
+            return;
+        }
+        int screenshotBytes = payload.screenshot() == null ? 0 : payload.screenshot().length();
+        log.info("[ai] [{}] ◀ FRAME received | sessionId={} | cmd=\"{}\" | screenshot={} chars ({}x{})",
+                stompSessionId,
+                payload.sessionId(),
+                truncate(payload.command(), 100),
+                screenshotBytes,
+                payload.frameWidth(),
+                payload.frameHeight()
+        );
 
-        // Off-thread : retire le handler STOMP du chemin critique (1-10s Gemini).
-        aiExecutor.execute(() -> {
-            AiActionEnvelope envelope;
-            try {
-                envelope = aiAgentService.analyse(payload);
-            } catch (Exception ex) {
-                log.error("[ai] unexpected failure analysing frame", ex);
-                envelope = AiActionEnvelope.error(
-                        payload == null ? null : payload.sessionId(),
-                        payload == null ? null : payload.command(),
-                        "Internal error: " + ex.getClass().getSimpleName());
-            }
-            sendToUser(stompSessionId, envelope);
-        });
+        // ─── Pipeline asynchrone avec timeout strict ──────────────────────
+        // CompletableFuture.supplyAsync + orTimeout : si l'analyse depasse
+        // AI_PIPELINE_TIMEOUT_SECONDS, le future est complete exceptionnellement
+        // avec TimeoutException, et on envoie l'erreur sans bloquer le pool.
+        CompletableFuture
+                .supplyAsync(() -> {
+                    log.info("[ai] [{}] → calling Gemini (model=gemini-2.5-flash)", stompSessionId);
+                    return aiAgentService.analyse(payload);
+                }, aiExecutor)
+                .orTimeout(AI_PIPELINE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((envelope, throwable) -> {
+                    long elapsed = System.currentTimeMillis() - tReceived;
+
+                    if (throwable instanceof TimeoutException) {
+                        log.warn("[ai] [{}] ✖ TIMEOUT after {}ms (limit={}s)",
+                                stompSessionId, elapsed, AI_PIPELINE_TIMEOUT_SECONDS);
+                        sendError(stompSessionId, payload.sessionId(), payload.command(),
+                                "Gemini timeout (>" + AI_PIPELINE_TIMEOUT_SECONDS + "s)");
+                        return;
+                    }
+                    if (throwable != null) {
+                        Throwable cause = throwable.getCause() != null ? throwable.getCause() : throwable;
+                        log.error("[ai] [{}] ✖ pipeline error after {}ms: {}",
+                                stompSessionId, elapsed, cause.toString(), cause);
+                        sendError(stompSessionId, payload.sessionId(), payload.command(),
+                                "Internal error: " + cause.getClass().getSimpleName());
+                        return;
+                    }
+
+                    // ─── Reponse Gemini recue ────────────────────────────
+                    int actionCount = envelope.actions() == null ? 0 : envelope.actions().size();
+                    log.info("[ai] [{}] ◀ Gemini response | status={} | actions={} | rationale=\"{}\" | total {}ms",
+                            stompSessionId,
+                            envelope.status(),
+                            actionCount,
+                            truncate(envelope.rationale(), 100),
+                            elapsed
+                    );
+
+                    log.info("[ai] [{}] ▶ sending actions to /user/queue/ai/actions", stompSessionId);
+                    sendToUser(stompSessionId, envelope);
+                });
     }
 
     /**
@@ -105,8 +163,48 @@ public class AiController {
                     headers.getMessageHeaders()
             );
         } catch (Exception ex) {
-            log.warn("[ai] failed to send actions to user-destination (session={}): {}",
+            log.warn("[ai] [{}] failed to send actions to user-destination: {}",
                     stompSessionId, ex.getMessage());
+        }
+    }
+
+    /**
+     * Envoie une erreur cote serveur (timeout, exception inattendue, payload
+     * invalide). Pousse en parallele sur /queue/ai/error (canal dedie) ET
+     * sur /queue/ai/actions sous forme d'envelope error, pour que le front
+     * recoive l'erreur quel que soit le subscribe choisi.
+     */
+    private void sendError(String stompSessionId, String sessionId, String command, String message) {
+        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        headers.setSessionId(stompSessionId);
+        headers.setLeaveMutable(true);
+
+        var errorEnvelope = AiActionEnvelope.error(sessionId, command, message);
+
+        // 1) Canal dedie pour les erreurs (le front peut afficher banner/toast).
+        try {
+            messagingTemplate.convertAndSendToUser(
+                    stompSessionId,
+                    USER_ERROR_DESTINATION,
+                    errorEnvelope,
+                    headers.getMessageHeaders()
+            );
+        } catch (Exception ex) {
+            log.warn("[ai] [{}] failed to send to {}: {}",
+                    stompSessionId, USER_ERROR_DESTINATION, ex.getMessage());
+        }
+
+        // 2) Canal actions habituel — pour les fronts qui n'ecoutent QUE celui-ci.
+        try {
+            messagingTemplate.convertAndSendToUser(
+                    stompSessionId,
+                    USER_ACTIONS_DESTINATION,
+                    errorEnvelope,
+                    headers.getMessageHeaders()
+            );
+        } catch (Exception ex) {
+            log.warn("[ai] [{}] failed to send error fallback to {}: {}",
+                    stompSessionId, USER_ACTIONS_DESTINATION, ex.getMessage());
         }
     }
 
