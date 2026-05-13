@@ -28,6 +28,15 @@ public record AiAction(
         List<String> modifiers,
         String cmd,
         String shell,
-        Integer ms
+        Integer ms,
+        // ── scroll ───────────────────────────────────────────────────────
+        /** Scroll vertical : positif = descendre, negatif = remonter (clics de molette). */
+        Integer dy,
+        /** Scroll horizontal (optionnel, rare). */
+        Integer dx,
+        // ── drag ─────────────────────────────────────────────────────────
+        /** Coordonnees de destination du drag (x/y = point de depart). */
+        Double destX,
+        Double destY
 ) {
 }

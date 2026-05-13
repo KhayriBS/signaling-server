@@ -91,18 +91,139 @@ public class AiAgentService {
               { "type": "double_click", "x": <0..1>, "y": <0..1> }
               { "type": "move",         "x": <0..1>, "y": <0..1> }
               { "type": "type_text",    "text": "<string to type>" }
-              { "type": "key",          "key": "<Enter|Tab|Escape|F1..F12|a..z|0..9|...>", "modifiers": ["ctrl"|"alt"|"shift"|"meta"] }
+              { "type": "key",          "key": "<see SUPPORTED KEY NAMES below>", "modifiers": ["ctrl"|"alt"|"shift"|"meta"] }
               { "type": "shell",        "cmd": "<full shell command>", "shell": "cmd"|"powershell"|"bash" }
+              { "type": "scroll",       "x": <0..1>, "y": <0..1>, "dy": <int -30..30>, "dx": <int -30..30> }
+                  // dy/dx in mouse-wheel "clicks". Positive dy = scroll DOWN, negative = UP.
+                  // x/y optional — if present, cursor moves there first.
+              { "type": "drag",         "x": <0..1>, "y": <0..1>, "destX": <0..1>, "destY": <0..1>, "button": "left" }
+                  // x/y = drag origin, destX/destY = drag destination. For sliders,
+                  // drag-and-drop, text selection, window resize.
               { "type": "wait",         "ms": <50..10000> }
               { "type": "screenshot" }
 
-            RULES:
+            SUPPORTED KEY NAMES (case-insensitive):
+              • Navigation : Enter, Tab, Escape, Backspace, Delete, Insert, Home, End,
+                              PageUp, PageDown, ArrowLeft/Right/Up/Down, Space, CapsLock
+              • Modifiers  : Shift, Control, Alt, Meta (= Windows key)
+              • Function   : F1..F12
+              • Characters : single letter/digit (a-z, 0-9)
+              • Media      : VolumeUp, VolumeDown, VolumeMute, MediaPlay, MediaNext,
+                              MediaPrev, MediaStop  ← USE THESE for audio/playback tasks
+
+            COMMON TASK RECIPES (prefer these, they're rock-solid):
+
+              Volume / audio:
+                Decrease:  key "VolumeDown" repeated N times (each press ~2% on Windows).
+                Increase:  key "VolumeUp" repeated N times.
+                Mute:      Single key "VolumeMute".
+                ❌ Never click the Quick Settings volume slider — drag isn't precise enough.
+                For an exact level, use shell:
+                  shell powershell: (New-Object -ComObject WScript.Shell).SendKeys(...)
+                  or better: nircmd setsysvolume <0..65535>
+
+              Brightness:
+                shell powershell: (Get-CimInstance Win32_LogicalDisk -Namespace root/wmi).Brightness
+                  or: (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, <0..100>)
+
+              Media playback (YouTube / Spotify / VLC):
+                Use key "MediaPlayPause", "MediaNext", "MediaPrev" — works across all apps
+                without needing to focus the player window.
+
+              Open an app (most reliable, works for any installed app):
+                key "Meta" → wait 400ms → type_text "<app name>" → wait 600ms → key "Enter"
+                → wait 1500ms → screenshot
+                Always finish with a screenshot so the technician verifies.
+
+              Open a URL in browser:
+                If browser is closed: open it first (recipe above), wait 2000ms.
+                Then: key "l" with modifiers ["ctrl"] (Ctrl+L to focus address bar)
+                → type_text the URL → key "Enter".
+
+              Search the web:
+                Open browser → Ctrl+L → type "https://google.com/search?q=<query>" → Enter.
+
+              Find a file / search in Start:
+                key "Meta" → type_text "<filename>" → wait 800ms → screenshot to see
+                results → key "Enter" or click the relevant result.
+
+              File Explorer:
+                key "e" with modifiers ["meta"] (Win+E).
+                Navigate via address bar: Ctrl+L → type path → Enter.
+                New folder in current view: key "n" with modifiers ["ctrl", "shift"].
+                Refresh:                    key "F5".
+
+              Task manager / process kill:
+                Open: key "Escape" with modifiers ["ctrl", "shift"] (Ctrl+Shift+Esc).
+                Kill process by name (no UI): shell powershell: Stop-Process -Name <name> -Force
+                List top CPU: shell powershell: Get-Process | Sort-Object CPU -Descending | Select -First 10
+
+              Lock screen / sign out / restart:
+                Lock:    key "l" with modifiers ["meta"] (Win+L).
+                Restart: shell powershell: Restart-Computer -Force -Timeout 5
+                Sleep:   shell powershell: rundll32.exe powrprof.dll,SetSuspendState 0,1,0
+
+              Window management:
+                Minimize all:       key "d" with modifiers ["meta"] (Win+D).
+                Maximize current:   key "ArrowUp" with modifiers ["meta"].
+                Close window:       key "F4" with modifiers ["alt"] (Alt+F4).
+                Switch app:         key "Tab" with modifiers ["alt"].
+                Snap to left half:  key "ArrowLeft" with modifiers ["meta"].
+                Snap to right half: key "ArrowRight" with modifiers ["meta"].
+
+              Take a screenshot to the user's clipboard:
+                key "PrintScreen" — OR Snipping Tool via Win+Shift+S:
+                key "s" with modifiers ["meta", "shift"].
+
+              Scroll a long page / list:
+                action "scroll" with dy=5 (down) or dy=-5 (up). Repeat as needed.
+                For a Settings page or doc: dy=10 typically scrolls about half a screen.
+
+              Slider control (when media keys don't apply):
+                action "drag" from (slider current position) to (target position).
+                Estimate target x/y based on the slider's visible range in the screenshot.
+                Example for a volume slider going horizontally from x=0.3 to x=0.9 :
+                  to go to 50%, drag to x = 0.3 + 0.5*(0.9-0.3) = 0.6.
+
+              Send a chat message (WhatsApp Web, Discord, etc.):
+                Click the message input box (use coords from the screenshot).
+                Then: type_text "<message>" → key "Enter".
+
+              Type with special characters:
+                For accented chars (é, à, ü, etc.), type_text handles Unicode directly.
+                For symbols like @ or # on AZERTY keyboards, just type_text "@" —
+                the agent uses Windows scancode injection that respects the layout.
+
+              System info queries (return result in shell stdout, technician reads):
+                IP address:     shell cmd: ipconfig | findstr IPv4
+                Disk free:      shell powershell: Get-PSDrive C | Select Used,Free
+                CPU usage:      shell powershell: Get-Counter '\\Processor(_Total)\\% Processor Time'
+                Windows version: shell cmd: winver  (opens a dialog, then screenshot)
+                List users:     shell cmd: query user
+
+              Install / uninstall via winget (Windows 11):
+                Install Chrome: shell powershell: winget install -e --id Google.Chrome
+                Update all:     shell powershell: winget upgrade --all
+                Uninstall:      shell powershell: winget uninstall <name>
+                ⚠️ Long-running — wrap with a 20-30s wait + screenshot to verify.
+
+              Multi-step plans:
+                For complex tasks, decompose AGGRESSIVELY into small steps with waits
+                and screenshots between each major UI transition. Better 15 small
+                actions than 5 ambitious ones — small steps are easier to recover from.
+
+            GENERAL RULES:
               * Coordinates x/y are NORMALISED in [0, 1] relative to the screenshot.
               * Always finish a plan with a "screenshot" action so the technician
                 can verify the result.
               * For multi-step UI flows (open Start menu, type, press Enter, …),
-                insert a "wait" of 500-2000 ms between UI transitions.
-              * Prefer keyboard shortcuts over clicks when faster (Win+R, Ctrl+L, …).
+                insert a "wait" of 300-2000 ms between UI transitions.
+              * Prefer keyboard shortcuts and media keys over clicks when possible
+                (Win+R, Ctrl+L, VolumeDown × N, …) — way more reliable than coordinates.
+              * For tasks involving SLIDERS (volume slider, brightness slider,
+                progress bar) : use the corresponding media key if it exists, OR
+                approximate via repeated arrow keys after focusing the slider.
+                NEVER try to click+drag (not supported).
               * NEVER invent destructive shell commands (format, rm -rf /, del /F /Q
                 C:\\Windows, registry wipes, etc.). If the request is ambiguous or
                 dangerous, return:
@@ -396,13 +517,15 @@ public class AiAgentService {
                     clamp01(n.path("x").asDouble(0)),
                     clamp01(n.path("y").asDouble(0)),
                     "click".equals(type) ? normaliseButton(n.path("button").asText("left")) : null,
-                    null, null, null, null, null, null
+                    null, null, null, null, null, null,
+                    null, null, null, null
             );
             case "type_text" -> {
                 String text = n.path("text").asText("");
                 if (text.isEmpty()) yield null;
                 if (text.length() > 4000) text = text.substring(0, 4000);
-                yield new AiAction("type_text", null, null, null, text, null, null, null, null, null);
+                yield new AiAction("type_text", null, null, null, text, null, null, null, null, null,
+                        null, null, null, null);
             }
             case "key" -> {
                 String key = n.path("key").asText("").trim();
@@ -417,7 +540,8 @@ public class AiAgentService {
                         }
                     }
                 }
-                yield new AiAction("key", null, null, null, null, key, mods, null, null, null);
+                yield new AiAction("key", null, null, null, null, key, mods, null, null, null,
+                        null, null, null, null);
             }
             case "shell" -> {
                 String cmd = n.path("cmd").asText("").trim();
@@ -430,16 +554,54 @@ public class AiAgentService {
                 if (!shell.equals("cmd") && !shell.equals("powershell") && !shell.equals("bash")) {
                     shell = "powershell";
                 }
-                yield new AiAction("shell", null, null, null, null, null, null, cmd, shell, null);
+                yield new AiAction("shell", null, null, null, null, null, null, cmd, shell, null,
+                        null, null, null, null);
             }
             case "wait" -> {
                 int ms = n.path("ms").asInt(500);
                 ms = Math.max(50, Math.min(10_000, ms));
-                yield new AiAction("wait", null, null, null, null, null, null, null, null, ms);
+                yield new AiAction("wait", null, null, null, null, null, null, null, null, ms,
+                        null, null, null, null);
             }
-            case "screenshot" -> new AiAction("screenshot", null, null, null, null, null, null, null, null, null);
+            case "screenshot" -> new AiAction("screenshot",
+                    null, null, null, null, null, null, null, null, null,
+                    null, null, null, null);
+            // ── Scroll : molette souris, vertical (dy) + horizontal optionnel (dx) ──
+            //   Positif = descendre / vers la droite. Unite = "clicks" molette
+            //   (~120 sur Windows par cran). Sans x/y, scroll a la position actuelle.
+            case "scroll" -> {
+                int dy = clampScroll(n.path("dy").asInt(0));
+                int dx = clampScroll(n.path("dx").asInt(0));
+                if (dy == 0 && dx == 0) yield null; // no-op
+                Double sx = n.has("x") ? clamp01(n.path("x").asDouble(0)) : null;
+                Double sy = n.has("y") ? clamp01(n.path("y").asDouble(0)) : null;
+                yield new AiAction("scroll", sx, sy, null, null, null, null, null, null, null,
+                        dy, dx, null, null);
+            }
+            // ── Drag : x/y = depart, destX/destY = arrivee ──
+            //   Pour sliders, drag-and-drop, selection de texte par drag, etc.
+            case "drag" -> {
+                double fromX = clamp01(n.path("x").asDouble(0));
+                double fromY = clamp01(n.path("y").asDouble(0));
+                double toX = clamp01(n.path("destX").asDouble(0));
+                double toY = clamp01(n.path("destY").asDouble(0));
+                String btn = normaliseButton(n.path("button").asText("left"));
+                yield new AiAction("drag", fromX, fromY, btn, null, null, null, null, null, null,
+                        null, null, toX, toY);
+            }
             default -> null;
         };
+    }
+
+    /**
+     * Clamp scroll a +/- 30 clicks de molette. Plus que ca dans une seule
+     * action = probablement une erreur de Gemini (il vaut mieux N actions de
+     * petit scroll que 1 action de 500 clicks).
+     */
+    private static int clampScroll(int v) {
+        if (v > 30) return 30;
+        if (v < -30) return -30;
+        return v;
     }
 
     private static String normaliseButton(String b) {
