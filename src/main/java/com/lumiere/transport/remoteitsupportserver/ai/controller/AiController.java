@@ -50,11 +50,17 @@ public class AiController {
 
     /**
      * Limite stricte sur l'appel IA complet (build payload + Gemini + parse
-     * + persistance). Gemini Flash repond en general en 1-5s mais peut hanger
-     * sur 30s+ en cas de surcharge regionale. Au-dela on rend la main au user
-     * plutot que de garder un thread bloque.
+     * + persistance + retry 429).
+     *
+     * Budget detaille :
+     *   • HTTP attempt 1     : jusqu'a 25 s (HTTP_READ_TIMEOUT cote service)
+     *   • Backoff 429        : jusqu'a 8 s  (parseGeminiRetryDelayMs, cape a 8 s)
+     *   • HTTP attempt 2     : reste = 45 - 25 - 8 = 12 s
+     * Si l'attente totale depasse 45s, le user prefere voir "timeout" plutot que
+     * d'attendre indefiniment. Le HTTP_READ_TIMEOUT cote service libere quand
+     * meme le worker thread proprement, evitant les fuites de pool.
      */
-    private static final int AI_PIPELINE_TIMEOUT_SECONDS = 30;
+    private static final int AI_PIPELINE_TIMEOUT_SECONDS = 45;
 
     private final AiAgentService aiAgentService;
     private final SimpMessagingTemplate messagingTemplate;

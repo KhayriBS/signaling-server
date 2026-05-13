@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -49,7 +50,20 @@ public class AiAgentService {
     private static final String GEMINI_BASE_URL =
             "https://generativelanguage.googleapis.com/v1beta/models";
     private static final String GEMINI_MODEL = "gemini-2.5-flash";
-    private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(45);
+
+    /**
+     * Timeouts HTTP au niveau de RestClient (par tentative). Si Gemini ne
+     * repond pas sous READ_TIMEOUT, on jette ResourceAccessException et le
+     * worker thread est libere proprement — sinon, orTimeout(45s) du
+     * controller fire mais le socket TCP reste bloque jusqu'a infiniment.
+     *
+     * Budget total cote pipeline (AiController.AI_PIPELINE_TIMEOUT_SECONDS = 45) :
+     *   (HTTP attempt 1 : 25 s max) + (backoff 429 : 8 s max) + (HTTP attempt 2 : 25 s max) = 58 s
+     * Donc en pratique, la 2eme tentative ne va pas jusqu'au bout — c'est OK,
+     * un 429 retry-after demande deja 8s donc on a au moins 12s pour la 2eme tentative.
+     */
+    private static final Duration HTTP_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration HTTP_READ_TIMEOUT = Duration.ofSeconds(25);
     private static final int MAX_ACTIONS = 32;
 
     /**
@@ -107,9 +121,23 @@ public class AiAgentService {
         this.objectMapper = objectMapper;
         this.aiSessionRepository = aiSessionRepository;
         this.geminiApiKey = geminiApiKey == null ? "" : geminiApiKey.trim();
+        // Factory HTTP avec timeouts explicites — sinon RestClient hereditate
+        // les defauts JDK (= unlimited) et un Gemini bloque garde notre worker
+        // ad vitam aeternam, meme apres l'orTimeout du controller.
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout((int) HTTP_CONNECT_TIMEOUT.toMillis());
+        factory.setReadTimeout((int) HTTP_READ_TIMEOUT.toMillis());
+
         this.httpClient = RestClient.builder()
                 .baseUrl(GEMINI_BASE_URL)
+                .requestFactory(factory)
                 .build();
+
+        log.info("[ai-service] initialised — model={}, httpConnect={}s, httpRead={}s, apiKey={}",
+                GEMINI_MODEL,
+                HTTP_CONNECT_TIMEOUT.toSeconds(),
+                HTTP_READ_TIMEOUT.toSeconds(),
+                this.geminiApiKey.isEmpty() ? "MISSING" : "set");
     }
 
     /**
@@ -546,7 +574,8 @@ public class AiAgentService {
         return Map.of(
                 "model", GEMINI_MODEL,
                 "apiKeyConfigured", !geminiApiKey.isEmpty(),
-                "httpTimeoutSeconds", HTTP_TIMEOUT.toSeconds()
+                "httpConnectTimeoutSeconds", HTTP_CONNECT_TIMEOUT.toSeconds(),
+                "httpReadTimeoutSeconds", HTTP_READ_TIMEOUT.toSeconds()
         );
     }
 }
