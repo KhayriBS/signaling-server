@@ -4,14 +4,6 @@ import jakarta.persistence.*;
 
 import java.time.Instant;
 
-/**
- * Une ligne par appel IA. On garde la commande, le JSON brut renvoye par Gemini
- * (parseable cote front pour rejouer), le status ("ok"/"error") et le message
- * d'erreur eventuel — utile pour debug / facturation / metriques d'usage.
- *
- * Ne stocke PAS le screenshot lui-meme (trop volumineux : 200-800 KB par ligne).
- * Si tu veux l'audit visuel, externalise vers S3/MinIO et garde l'URL ici.
- */
 @Entity
 @Table(name = "ai_sessions", indexes = {
         @Index(name = "idx_ai_sessions_session_id", columnList = "sessionId"),

@@ -29,15 +29,7 @@ import java.util.concurrent.TimeoutException;
  *
  * Reponse envoyee sur {@code /user/queue/ai/actions} via
  * {@link SimpMessagingTemplate#convertAndSendToUser(String, String, Object, java.util.Map)}.
- * Comme l'endpoint /ws/chat n'authentifie pas le STOMP CONNECT (cf
- * StompWebSocketConfig), il n'y a pas de {@code Principal}. On utilise le
- * {@code simpSessionId} comme cle "user" — Spring le reconnait quand on lui
- * passe explicitement comme header via {@code SimpMessageHeaderAccessor}.
- *
- * L'appel Gemini est exporte sur un pool de threads dedie pour ne pas bloquer
- * le thread STOMP inbound (latence HTTP 1-10s). Le client recoit la reponse
- * de facon asynchrone — c'est invisible cote front car le client est deja
- * abonne au queue.
+
  */
 @Controller
 public class AiController {
@@ -47,34 +39,10 @@ public class AiController {
     /** Destination relative au user-prefix ("/user" + ce path). */
     private static final String USER_ACTIONS_DESTINATION = "/queue/ai/actions";
 
-    /**
-     * Destination separee pour les erreurs cote serveur (timeout, exception
-     * inattendue, etc.) que le front peut surveiller independamment de
-     * /queue/ai/actions pour declencher une UI specifique (banner / toast).
-     */
     private static final String USER_ERROR_DESTINATION = "/queue/ai/error";
-
-    /**
-     * Limite stricte sur l'appel IA complet (build payload + Gemini + parse
-     * + persistance + retry 429).
-     *
-     * Budget detaille :
-     *   • HTTP attempt 1     : jusqu'a 25 s (HTTP_READ_TIMEOUT cote service)
-     *   • Backoff 429        : jusqu'a 8 s  (parseGeminiRetryDelayMs, cape a 8 s)
-     *   • HTTP attempt 2     : reste = 45 - 25 - 8 = 12 s
-     * Si l'attente totale depasse 45s, le user prefere voir "timeout" plutot que
-     * d'attendre indefiniment. Le HTTP_READ_TIMEOUT cote service libere quand
-     * meme le worker thread proprement, evitant les fuites de pool.
-     */
     private static final int AI_PIPELINE_TIMEOUT_SECONDS = 45;
-
     private final AiAgentService aiAgentService;
     private final SimpMessagingTemplate messagingTemplate;
-
-    /**
-     * Pool dedie — taille bornee pour eviter qu'un burst de commandes IA ne
-     * sature la JVM (chaque appel Gemini consomme ~1-2 MB de heap pour le base64).
-     */
     private final ExecutorService aiExecutor = Executors.newFixedThreadPool(4, r -> {
         Thread t = new Thread(r, "ai-agent-worker");
         t.setDaemon(true);
@@ -112,11 +80,8 @@ public class AiController {
                 payload.frameWidth(),
                 payload.frameHeight()
         );
+        // ─── Pipeline async ──────────────────────────────────────────────
 
-        // ─── Pipeline asynchrone avec timeout strict ──────────────────────
-        // CompletableFuture.supplyAsync + orTimeout : si l'analyse depasse
-        // AI_PIPELINE_TIMEOUT_SECONDS, le future est complete exceptionnellement
-        // avec TimeoutException, et on envoie l'erreur sans bloquer le pool.
         CompletableFuture
                 .supplyAsync(() -> {
                     log.info("[ai] [{}] → calling Gemini (model=gemini-2.5-flash)", stompSessionId);
@@ -157,20 +122,7 @@ public class AiController {
                 });
     }
 
-    /**
-     * Alternative REST a {@link #onFrame} pour les payloads volumineux. Le frame
-     * IA (screenshot ~95 KB base64 + JSON wrapper) peut etre jete par certains
-     * proxys WebSocket (Render free-tier notamment) — passer en HTTP POST evite
-     * la limite de taille des frames STOMP / SockJS.
-     *
-     * La reponse Gemini arrive toujours via STOMP sur {@code /topic/ai/<sessionId>}
-     * (et /user/queue/ai/actions en duplicate) — le client doit etre abonne AVANT
-     * d'envoyer le POST.
-     *
-     * Repond immediatement avec {@code accepted:true, requestId:...} et lance
-     * l'analyse Gemini en arriere-plan. Le client n'a qu'a attendre l'envelope
-     * STOMP retour.
-     */
+  
     @PostMapping("/ai/frame")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> postFrame(@RequestBody AiFrameRequest payload) {
@@ -204,8 +156,6 @@ public class AiController {
         );
 
         // ─── Pipeline async, identique a onFrame() ──────────────────────
-        // La reponse part SEULEMENT sur /topic/ai/<sessionId> car on n'a
-        // pas de simpSessionId STOMP ici (REST decouple du WebSocket).
         CompletableFuture
                 .supplyAsync(() -> {
                     log.info("[ai] [REST/{}] → calling Gemini (model=gemini-2.5-flash)", requestId);
@@ -252,31 +202,11 @@ public class AiController {
         ));
     }
 
-    /**
-     * Envoie le resultat IA au client via DEUX canaux paralleles :
-     *
-     *   1. /user/queue/ai/actions   (resolution user-destination Spring)
-     *   2. /topic/ai/<sessionId>    (broadcast topic — voie robuste, pas de
-     *                                resolution magique a faire)
-     *
-     * Le double envoi sert de garde-fou : si la voie 1 echoue silencieusement
-     * (probleme de Principal/Authentication, race sur le simpSessionId, etc.),
-     * la voie 2 delivre quand meme. Le client doit dedupliquer cote front
-     * (mais c'est une boucle infiniment plus simple a debugger qu'un message
-     * jamais arrive).
-     */
+  
     private void sendToUser(String stompSessionId, AiActionEnvelope envelope) {
         publishBothChannels(stompSessionId, envelope, USER_ACTIONS_DESTINATION);
     }
 
-    /**
-     * Envoie une erreur via deux canaux paralleles :
-     *
-     *   1. /user/queue/ai/error     (canal dedie aux erreurs)
-     *   2. /user/queue/ai/actions   (canal principal — pour les clients qui
-     *                                n'ecoutent que celui-ci)
-     *   3. /topic/ai/<sessionId>    (topic robuste, garde-fou)
-     */
     private void sendError(String stompSessionId, String sessionId, String command, String message) {
         var errorEnvelope = AiActionEnvelope.error(sessionId, command, message);
 

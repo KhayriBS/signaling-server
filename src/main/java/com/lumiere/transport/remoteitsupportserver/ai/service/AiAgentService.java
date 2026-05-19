@@ -51,27 +51,10 @@ public class AiAgentService {
             "https://generativelanguage.googleapis.com/v1beta/models";
     private static final String GEMINI_MODEL = "gemini-2.5-flash";
 
-    /**
-     * Timeouts HTTP au niveau de RestClient (par tentative). Si Gemini ne
-     * repond pas sous READ_TIMEOUT, on jette ResourceAccessException et le
-     * worker thread est libere proprement — sinon, orTimeout(45s) du
-     * controller fire mais le socket TCP reste bloque jusqu'a infiniment.
-     *
-     * Budget total cote pipeline (AiController.AI_PIPELINE_TIMEOUT_SECONDS = 45) :
-     *   (HTTP attempt 1 : 25 s max) + (backoff 429 : 8 s max) + (HTTP attempt 2 : 25 s max) = 58 s
-     * Donc en pratique, la 2eme tentative ne va pas jusqu'au bout — c'est OK,
-     * un 429 retry-after demande deja 8s donc on a au moins 12s pour la 2eme tentative.
-     */
     private static final Duration HTTP_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration HTTP_READ_TIMEOUT = Duration.ofSeconds(25);
     private static final int MAX_ACTIONS = 32;
-
-    /**
-     * System prompt — designe explicitement le modele comme un agent OS qui ne
-     * produit RIEN d'autre que du JSON conforme au schema d'actions. Sans cette
-     * contrainte stricte, Gemini ajoute des markdown fences et du texte autour
-     * et tout tombe.
-     */
+// Le system prompt est la piece centrale de ce service : il explique en detail a
     private static final String SYSTEM_PROMPT = """
             You are an OS automation agent embedded in a remote-support tool.
             You receive (1) a JPEG screenshot of a Windows desktop and (2) a
@@ -242,9 +225,6 @@ public class AiAgentService {
         this.objectMapper = objectMapper;
         this.aiSessionRepository = aiSessionRepository;
         this.geminiApiKey = geminiApiKey == null ? "" : geminiApiKey.trim();
-        // Factory HTTP avec timeouts explicites — sinon RestClient hereditate
-        // les defauts JDK (= unlimited) et un Gemini bloque garde notre worker
-        // ad vitam aeternam, meme apres l'orTimeout du controller.
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout((int) HTTP_CONNECT_TIMEOUT.toMillis());
         factory.setReadTimeout((int) HTTP_READ_TIMEOUT.toMillis());
@@ -280,9 +260,6 @@ public class AiAgentService {
                     "Gemini API key not configured (gemini.api.key)", t0);
         }
 
-        // Appel HTTP — avec un retry unique sur 429 (rate limit) apres 4s,
-        // car le quota free-tier Gemini est tres bas (~10 req/min) et un seul
-        // burst utilisateur peut declencher un 429 transitoire.
         String body;
         try {
             body = buildGeminiPayload(req);
@@ -445,10 +422,6 @@ public class AiAgentService {
         return objectMapper.writeValueAsString(root);
     }
 
-    /**
-     * Extrait le {@code candidates[0].content.parts[0].text} de la reponse
-     * Gemini. Si absent, renvoie une chaine vide (sera traitee comme parse fail).
-     */
     private String extractText(String responseBody) {
         JsonNode root = objectMapper.readTree(responseBody);
         JsonNode candidates = root.path("candidates");
@@ -491,10 +464,7 @@ public class AiAgentService {
         return new ParsedPlan(rationale, actions);
     }
 
-    /**
-     * Si jamais Gemini ignore {@code responseMimeType} et entoure quand meme la
-     * sortie de ```json ... ```, on nettoie.
-     */
+
     private String stripMarkdownFences(String s) {
         String t = s.trim();
         if (t.startsWith("```")) {
@@ -505,10 +475,7 @@ public class AiAgentService {
         return t.trim();
     }
 
-    /**
-     * Mappe un noeud JSON en AiAction en faisant les coercions/clamps.
-     * Retourne null si le type est inconnu (skip silencieusement).
-     */
+   
     private AiAction mapAction(JsonNode n) {
         String type = n.path("type").asText("").toLowerCase();
         return switch (type) {
@@ -566,9 +533,7 @@ public class AiAgentService {
             case "screenshot" -> new AiAction("screenshot",
                     null, null, null, null, null, null, null, null, null,
                     null, null, null, null);
-            // ── Scroll : molette souris, vertical (dy) + horizontal optionnel (dx) ──
-            //   Positif = descendre / vers la droite. Unite = "clicks" molette
-            //   (~120 sur Windows par cran). Sans x/y, scroll a la position actuelle.
+
             case "scroll" -> {
                 int dy = clampScroll(n.path("dy").asInt(0));
                 int dx = clampScroll(n.path("dx").asInt(0));
@@ -578,8 +543,7 @@ public class AiAgentService {
                 yield new AiAction("scroll", sx, sy, null, null, null, null, null, null, null,
                         dy, dx, null, null);
             }
-            // ── Drag : x/y = depart, destX/destY = arrivee ──
-            //   Pour sliders, drag-and-drop, selection de texte par drag, etc.
+
             case "drag" -> {
                 double fromX = clamp01(n.path("x").asDouble(0));
                 double fromY = clamp01(n.path("y").asDouble(0));
@@ -593,11 +557,6 @@ public class AiAgentService {
         };
     }
 
-    /**
-     * Clamp scroll a +/- 30 clicks de molette. Plus que ca dans une seule
-     * action = probablement une erreur de Gemini (il vaut mieux N actions de
-     * petit scroll que 1 action de 500 clicks).
-     */
     private static int clampScroll(int v) {
         if (v > 30) return 30;
         if (v < -30) return -30;
@@ -635,10 +594,7 @@ public class AiAgentService {
         return s.substring(0, max) + "…";
     }
 
-    /**
-     * Formate un code HTTP Gemini en message lisible pour le technicien.
-     * Cas particulier : 429 (rate limit) — message court et actionnable.
-     */
+  
     private static String formatHttpError(int code, String bodyExcerpt) {
         if (code == 429) {
             // Cas le plus frequent en free-tier : "Quota IA depasse, attends ~30s."
@@ -660,11 +616,7 @@ public class AiAgentService {
                 + ": " + bodyExcerpt;
     }
 
-    /**
-     * Tente d'extraire un delai de retry du body JSON d'un 429 Gemini.
-     * L'API renvoie un champ {@code retryDelay} dans le {@code RetryInfo} dans
-     * {@code error.details}. Format : "30s" → 30000 ms.
-     */
+
     private java.util.Optional<Long> parseGeminiRetryDelayMs(String body) {
         if (body == null || body.isBlank()) return java.util.Optional.empty();
         try {
