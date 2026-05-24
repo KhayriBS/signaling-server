@@ -100,17 +100,25 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
 
         SignalMessage msg = mapper.readValue(message.getPayload(), SignalMessage.class);
 
-        // On attend OFFER/ANSWER/ICE
         if (msg.getType() == null || msg.getTo() == null) {
             session.sendMessage(new TextMessage(error("Invalid message: type/to required")));
             return;
         }
 
-        // Récupérer sessionId depuis les attributs (stocké à la connexion)
         String sessionId = (String) session.getAttributes().get("sessionId");
         if (sessionId == null) {
             session.sendMessage(new TextMessage(error("Missing sessionId")));
             return;
+        }
+
+        String fromRole = (String) session.getAttributes().get("role");
+
+        if (msg.getType() == SignalType.ICE) {
+            String iceLine = extractIceCandidateLine(msg.getPayload());
+            String iceType = parseIceCandidateType(iceLine);
+            log.info("🧊 [ICE relay] session={} {} → {}  type={}  candidate={}",
+                    sessionId, fromRole, msg.getTo(), iceType,
+                    iceLine == null ? "<null>" : truncate(iceLine, 160));
         }
 
         WebSocketSession peer = signalingService.getPeer(sessionId, msg.getTo());
@@ -119,8 +127,39 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        // Relay brut
         peer.sendMessage(new TextMessage(mapper.writeValueAsString(msg)));
+    }
+
+    private String extractIceCandidateLine(Object payload) {
+        if (payload instanceof Map<?, ?> map) {
+            Object cand = map.get("candidate");
+            if (cand != null) {
+                return cand.toString();
+            }
+        }
+        return null;
+    }
+
+    private String parseIceCandidateType(String candidateLine) {
+        if (candidateLine == null || candidateLine.isEmpty()) {
+            return "unknown";
+        }
+        int idx = candidateLine.indexOf(" typ ");
+        if (idx < 0) {
+            return "unknown";
+        }
+        String rest = candidateLine.substring(idx + 5).trim();
+        int end = rest.indexOf(' ');
+        String typ = (end < 0 ? rest : rest.substring(0, end)).toLowerCase();
+        return switch (typ) {
+            case "host", "srflx", "relay", "prflx" -> typ;
+            default -> "unknown";
+        };
+    }
+
+    private String truncate(String s, int max) {
+        if (s.length() <= max) return s;
+        return s.substring(0, max) + "…";
     }
 
     @Override
