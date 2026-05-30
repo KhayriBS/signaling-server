@@ -38,13 +38,39 @@ public class JwtProvider {
     }
 
     public String generateTokenAgent(Agent agent) {
-        return Jwts.builder()
+        return generateTokenAgent(agent, null, null);
+    }
+
+    /**
+     * Émet un JWT agent enrichi avec le rôle du propriétaire assigné.
+     * `ownerRole` vaut "ROLE_ADMIN" / "ROLE_USER" / null. Le JwtFilter
+     * grantera ROLE_AGENT + ownerRole, ce qui permet à la même UI (lancée
+     * depuis la machine) d'appeler /admin/** ou /agents/mine sans login.
+     */
+    public String generateTokenAgent(Agent agent, String ownerRole, String ownerUsername) {
+        var builder = Jwts.builder()
                 .setSubject(agent.getMachineId())
-                .claim("role", "ROLE_AGENT") // ✅ important
+                .claim("role", "ROLE_AGENT")
                 .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + expirationMs))
-                .signWith(Keys.hmacShaKeyFor(key()), SignatureAlgorithm.HS256)
-                .compact();
+                .setExpiration(new Date(System.currentTimeMillis() + expirationMs));
+
+        if (ownerRole != null && !ownerRole.isBlank()) {
+            builder.claim("ownerRole", ownerRole);
+        }
+        if (ownerUsername != null && !ownerUsername.isBlank()) {
+            builder.claim("ownerUsername", ownerUsername);
+        }
+        return builder.signWith(Keys.hmacShaKeyFor(key()), SignatureAlgorithm.HS256).compact();
+    }
+
+    public String getOwnerRole(String token) {
+        Object r = getClaims(token).get("ownerRole");
+        return r == null ? null : r.toString();
+    }
+
+    public String getOwnerUsername(String token) {
+        Object r = getClaims(token).get("ownerUsername");
+        return r == null ? null : r.toString();
     }
 
     public io.jsonwebtoken.Claims getClaims(String token) {

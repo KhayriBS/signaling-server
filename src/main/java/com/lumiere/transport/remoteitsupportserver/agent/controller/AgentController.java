@@ -1,5 +1,6 @@
 package com.lumiere.transport.remoteitsupportserver.agent.controller;
 
+import com.lumiere.transport.remoteitsupportserver.agent.dto.AgentLoginResponse;
 import com.lumiere.transport.remoteitsupportserver.agent.dto.AgentMetricsDto;
 import com.lumiere.transport.remoteitsupportserver.agent.entity.Agent;
 import com.lumiere.transport.remoteitsupportserver.agent.service.AgentMetricsService;
@@ -28,8 +29,8 @@ public class AgentController {
         return agentPresenceService.registerOrUpdate(machineId, hostname, os);
     }
     @PostMapping("/login")
-    public String agentLogin(@RequestParam String machineId,
-                             @RequestParam String os) {
+    public AgentLoginResponse agentLogin(@RequestParam String machineId,
+                                         @RequestParam String os) {
         return agentPresenceService.loginAgent(machineId, os);
     }
 
@@ -55,6 +56,15 @@ public class AgentController {
     @GetMapping("/online")
     public List<Agent> getOnlineAgents(Authentication authentication) {
         return agentPresenceService.getOnlineAgents(authentication);
+    }
+
+    /**
+     * Machines attribuées au propriétaire de la machine appelante.
+     * Appelé par la vue Svelte /my-machines avec le JWT agent.
+     */
+    @GetMapping("/mine")
+    public List<Agent> getMyMachines(Authentication authentication) {
+        return agentPresenceService.getMachinesForCallerOwner(authentication);
     }
 
     @PostMapping("/{agentId}/assign/{username}")

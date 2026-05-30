@@ -27,6 +27,10 @@ public class Agent {
     @Column
     private String assignedUsername;
 
+    private Instant assignedAt;
+
+    private String assignedBy;
+
     @Column(unique = true, length = 6)
     private String connectionCode;
 

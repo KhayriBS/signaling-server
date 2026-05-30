@@ -1,9 +1,12 @@
 package com.lumiere.transport.remoteitsupportserver.agent.service;
 
+import com.lumiere.transport.remoteitsupportserver.agent.dto.AgentLoginResponse;
 import com.lumiere.transport.remoteitsupportserver.agent.entity.Agent;
 import com.lumiere.transport.remoteitsupportserver.agent.entity.AgentStatus;
 import com.lumiere.transport.remoteitsupportserver.agent.repository.AgentRepository;
 import com.lumiere.transport.remoteitsupportserver.auth.security.JwtProvider;
+import com.lumiere.transport.remoteitsupportserver.user.entity.Role;
+import com.lumiere.transport.remoteitsupportserver.user.entity.User;
 import com.lumiere.transport.remoteitsupportserver.user.repository.UserRepository;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
@@ -48,7 +51,7 @@ public class AgentPresenceService {
 
         return agentRepository.save(agent);
     }
-    public String loginAgent(String machineId, String os) {
+    public AgentLoginResponse loginAgent(String machineId, String os) {
         Agent agent = agentRepository.findByMachineId(machineId)
                 .orElseGet(() -> {
                     Agent a = new Agent();
@@ -65,8 +68,27 @@ public class AgentPresenceService {
         ensureConnectionCode(agent);
         Agent saved = agentRepository.save(agent);
 
-        return jwtProvider.generateTokenAgent(saved);
+        var owner = (saved.getAssignedUsername() == null || saved.getAssignedUsername().isBlank())
+                ? java.util.Optional.<User>empty()
+                : userRepository.findByUsername(saved.getAssignedUsername());
+
+        String ownerSpringRole = owner.map(u -> "ROLE_" + u.getRole().name()).orElse(null);
+        String ownerUsername = owner.map(User::getUsername).orElse(null);
+
+        String token = jwtProvider.generateTokenAgent(saved, ownerSpringRole, ownerUsername);
+        String role = owner
+                .map(u -> u.getRole() == Role.ADMIN ? "TECHNICIAN" : "USER")
+                .orElse("PENDING");
+
+        return new AgentLoginResponse(
+                token,
+                role,
+                saved.getMachineId(),
+                saved.getAssignedUsername(),
+                saved.getConnectionCode()
+        );
     }
+
     public List<Agent> getAllAgents(Authentication authentication) {
         if (authentication == null) {
             return agentRepository.findAll();
@@ -89,6 +111,23 @@ public class AgentPresenceService {
         return agentRepository.findByAssignedUsernameAndStatus(authentication.getName(), AgentStatus.ONLINE);
     }
 
+    /**
+     * Liste les machines attribuées au propriétaire de la machine appelante.
+     * Utilisé par la vue USER (/my-machines) qui appelle avec le JWT agent —
+     * principal == machineId, donc on remonte au owner via assignedUsername.
+     */
+    public List<Agent> getMachinesForCallerOwner(Authentication authentication) {
+        if (authentication == null) {
+            return List.of();
+        }
+        String callerMachineId = authentication.getName();
+        return agentRepository.findByMachineId(callerMachineId)
+                .map(Agent::getAssignedUsername)
+                .filter(u -> u != null && !u.isBlank())
+                .map(agentRepository::findByAssignedUsername)
+                .orElseGet(List::of);
+    }
+
     public Agent assignAgentToUser(Long agentId, String username, Authentication authentication) {
         if (!isAdmin(authentication)) {
             throw new AccessDeniedException("Only admins can assign machines");
@@ -101,7 +140,23 @@ public class AgentPresenceService {
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
 
         agent.setAssignedUsername(username);
+        agent.setAssignedAt(Instant.now());
+        agent.setAssignedBy(authentication.getName());
         return agentRepository.save(agent);
+    }
+
+    /**
+     * Variante numérique demandée par /admin/machines/{id}/assign {userId}.
+     * Résout l'User par id, puis délègue à assignAgentToUser pour mutualiser
+     * le tampon assignedAt/assignedBy.
+     */
+    public Agent assignAgentByUserId(Long agentId, Long userId, Authentication authentication) {
+        if (!isAdmin(authentication)) {
+            throw new AccessDeniedException("Only admins can assign machines");
+        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+        return assignAgentToUser(agentId, user.getUsername(), authentication);
     }
 
     public Agent unassignAgent(Long agentId, Authentication authentication) {
@@ -113,6 +168,8 @@ public class AgentPresenceService {
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
 
         agent.setAssignedUsername(null);
+        agent.setAssignedAt(null);
+        agent.setAssignedBy(null);
         return agentRepository.save(agent);
     }
 

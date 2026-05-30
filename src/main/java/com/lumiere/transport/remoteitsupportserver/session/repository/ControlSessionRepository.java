@@ -14,24 +14,13 @@ public interface ControlSessionRepository extends JpaRepository<ControlSession, 
             String agentMachineId,
             SessionStatus status
     );
+    List<ControlSession> findByStatus(SessionStatus status);
+    long countByStatus(SessionStatus status);
     Optional<ControlSession> findBySignalingToken(String signalingToken);
     Optional<ControlSession> findBySignalingTokenAndStatus(String signalingToken, SessionStatus status);
     Optional<ControlSession> findByAgentMachineIdAndStatusIn(String agentMachineId, List<SessionStatus> statuses);
     Optional<ControlSession> findBySignalingTokenAndStatusIn(String signalingToken, List<SessionStatus> statuses);
 
-    /**
-     * Historique unifié des sessions impliquant une machine donnée.
-     *
-     * Une session est "entrante" pour la machine si elle est l'agent contrôlé
-     * (agentMachineId == :machineId). Elle est "sortante" si la machine a
-     * initié la session (technicianUsername == :machineId).
-     *
-     * Filtres optionnels :
-     *  - direction : "incoming" (agent), "outgoing" (technicien), ou null = les deux
-     *  - statuses  : sous-ensemble de SessionStatus à inclure ; null = tous
-     *  - search    : sous-chaîne (case-insensitive) à matcher dans agentMachineId,
-     *                technicianUsername ou signalingToken ; null/blank = pas de filtre
-     */
     @Query("""
         SELECT s FROM ControlSession s
         WHERE

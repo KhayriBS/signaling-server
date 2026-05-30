@@ -61,8 +61,17 @@ public class JwtFilter extends OncePerRequestFilter {
 
             if ("ROLE_AGENT".equals(role)) {
                 // ✅ Auth agent: principal = machineId, authorities = ROLE_AGENT
-                var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_AGENT"));
-                authentication = new UsernamePasswordAuthenticationToken(subject, null, authorities);
+                // + le ownerRole (ROLE_USER/ROLE_ADMIN) si la machine est
+                // attribuée — ça permet à la même UI Svelte d'accéder à
+                // /admin/** (technicien) ou aux endpoints USER (utilisateur)
+                // sans login manuel, comme spécifié.
+                var auths = new java.util.ArrayList<org.springframework.security.core.GrantedAuthority>();
+                auths.add(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_AGENT"));
+                String ownerRole = jwtProvider.getOwnerRole(token);
+                if (ownerRole != null && !ownerRole.isBlank()) {
+                    auths.add(new org.springframework.security.core.authority.SimpleGrantedAuthority(ownerRole));
+                }
+                authentication = new UsernamePasswordAuthenticationToken(subject, null, auths);
             } else {
                 // ✅ Auth user normal
                 UserDetails user = userDetailsService.loadUserByUsername(subject);
