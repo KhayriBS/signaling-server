@@ -28,7 +28,11 @@ public class User {
 
     private String department;
 
-    @Column(nullable = false)
+    // Nullable : les comptes USER sont créés par le technicien et ne se
+    // connectent jamais manuellement (le JWT vient de /agents/login via le
+    // BIOS serial). Seuls les comptes ADMIN qui utilisent /auth/login en
+    // ont besoin.
+    @Column
     private String password;
 
     @Enumerated(EnumType.STRING)
