@@ -8,6 +8,7 @@ import com.lumiere.transport.remoteitsupportserver.auth.security.JwtProvider;
 import com.lumiere.transport.remoteitsupportserver.user.entity.Role;
 import com.lumiere.transport.remoteitsupportserver.user.entity.User;
 import com.lumiere.transport.remoteitsupportserver.user.repository.UserRepository;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
@@ -22,14 +23,26 @@ public class AgentPresenceService {
     private final AgentRepository agentRepository;
     private final JwtProvider jwtProvider;
     private final UserRepository userRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
 
     public AgentPresenceService(AgentRepository agentRepository,
                                 JwtProvider jwtProvider,
-                                UserRepository userRepository) {
+                                UserRepository userRepository,
+                                SimpMessagingTemplate messagingTemplate) {
         this.agentRepository = agentRepository;
         this.jwtProvider = jwtProvider;
         this.userRepository = userRepository;
+        this.messagingTemplate = messagingTemplate;
+    }
+
+    /** Pousse l'agent modifié sur /topic/agents pour les dashboards abonnés. */
+    private void broadcastAgentUpdate(Agent agent) {
+        try {
+            messagingTemplate.convertAndSend("/topic/agents", agent);
+        } catch (Exception ignored) {
+            // Le broadcast est best-effort : un échec n'arrête pas l'opération métier.
+        }
     }
 
     public Agent registerOrUpdate(String machineId,
@@ -43,13 +56,18 @@ public class AgentPresenceService {
                     return a;
                 });
 
+        boolean wasOffline = agent.getStatus() != AgentStatus.ONLINE;
         agent.setHostname(hostname);
         agent.setOs(os);
         agent.setStatus(AgentStatus.ONLINE);
         agent.setLastHeartbeat(Instant.now());
         ensureConnectionCode(agent);
 
-        return agentRepository.save(agent);
+        Agent saved = agentRepository.save(agent);
+        if (wasOffline) {
+            broadcastAgentUpdate(saved);
+        }
+        return saved;
     }
     public AgentLoginResponse loginAgent(String machineId, String os) {
         Agent agent = agentRepository.findByMachineId(machineId)
@@ -62,11 +80,15 @@ public class AgentPresenceService {
                     return a;
                 });
 
+        boolean wasOffline = agent.getStatus() != AgentStatus.ONLINE;
         agent.setOs(os);
         agent.setStatus(AgentStatus.ONLINE);
         agent.setLastHeartbeat(Instant.now());
         ensureConnectionCode(agent);
         Agent saved = agentRepository.save(agent);
+        if (wasOffline) {
+            broadcastAgentUpdate(saved);
+        }
 
         var owner = (saved.getAssignedUsername() == null || saved.getAssignedUsername().isBlank())
                 ? java.util.Optional.<User>empty()
@@ -142,7 +164,9 @@ public class AgentPresenceService {
         agent.setAssignedUsername(username);
         agent.setAssignedAt(Instant.now());
         agent.setAssignedBy(authentication.getName());
-        return agentRepository.save(agent);
+        Agent saved = agentRepository.save(agent);
+        broadcastAgentUpdate(saved);
+        return saved;
     }
 
     /**
@@ -170,13 +194,15 @@ public class AgentPresenceService {
         agent.setAssignedUsername(null);
         agent.setAssignedAt(null);
         agent.setAssignedBy(null);
-        return agentRepository.save(agent);
+        Agent saved = agentRepository.save(agent);
+        broadcastAgentUpdate(saved);
+        return saved;
     }
 
     public void markOffline(String machineId) {
         agentRepository.findByMachineId(machineId).ifPresent(agent -> {
             agent.setStatus(AgentStatus.OFFLINE);
-            agentRepository.save(agent);
+            broadcastAgentUpdate(agentRepository.save(agent));
         });
     }
 
