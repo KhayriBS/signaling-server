@@ -52,6 +52,27 @@ public interface FileTransferLogRepository extends JpaRepository<FileTransferLog
             @Param("search") String search
     );
 
+    /**
+     * Vue admin : tous les transferts sans restriction de machine.
+     * Mêmes filtres optionnels que findHistoryForMachine.
+     */
+    @Query("""
+        SELECT f FROM FileTransferLog f
+        WHERE
+          (:statuses IS NULL OR f.status IN :statuses)
+          AND (
+            :search IS NULL OR :search = ''
+            OR LOWER(f.fileName)      LIKE LOWER(CONCAT('%', :search, '%'))
+            OR LOWER(f.fromMachineId) LIKE LOWER(CONCAT('%', :search, '%'))
+            OR LOWER(f.toMachineId)   LIKE LOWER(CONCAT('%', :search, '%'))
+          )
+        ORDER BY f.startedAt DESC
+    """)
+    List<FileTransferLog> findAllForAdmin(
+            @Param("statuses") List<FileTransferStatus> statuses,
+            @Param("search") String search
+    );
+
     List<FileTransferLog> findBySessionIdOrderByStartedAtDesc(Long sessionId);
 
     List<FileTransferLog> findByFromMachineIdAndDirectionOrderByStartedAtDesc(

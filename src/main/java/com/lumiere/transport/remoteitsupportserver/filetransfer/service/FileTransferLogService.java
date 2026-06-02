@@ -148,6 +148,23 @@ public class FileTransferLogService {
                 .toList();
     }
 
+    /**
+     * Vue admin globale : tous les transferts sans filtre machine.
+     * Le param `direction` n'a pas de sens ici → ignoré.
+     */
+    @Transactional(readOnly = true)
+    public List<FileTransferHistoryEntry> getAllHistory(String status, String search) {
+        List<FileTransferStatus> statuses = resolveStatusFilter(status);
+        String normalizedSearch = (search == null) ? null : search.trim();
+        if (normalizedSearch != null && normalizedSearch.isEmpty()) {
+            normalizedSearch = null;
+        }
+        return repository.findAllForAdmin(statuses, normalizedSearch)
+                .stream()
+                .map(log -> FileTransferHistoryEntry.fromEntity(log, null))
+                .toList();
+    }
+
     private String normalizeDirection(String direction) {
         if (direction == null) return null;
         String trimmed = direction.trim().toLowerCase();

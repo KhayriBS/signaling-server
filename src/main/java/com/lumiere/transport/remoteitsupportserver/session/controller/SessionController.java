@@ -165,6 +165,20 @@ public class SessionController {
      *   GET /sessions/history/DESKTOP-A4B2C9?direction=outgoing&amp;status=ended&amp;q=LAPTOP
      *   GET /sessions/history/560687?direction=incoming&amp;status=active
      */
+    /**
+     * Historique GLOBAL (toutes machines) pour la vue technicien.
+     * Pas de path param : SecurityConfig verrouille l'accès à ROLE_ADMIN.
+     */
+    @GetMapping("/history")
+    public ApiResponse<List<SessionHistoryEntry>> getAllSessionHistory(
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "q", required = false) String search) {
+
+        return ApiResponse.success(
+                sessionService.getAllSessionHistory(status, search)
+        );
+    }
+
     @GetMapping("/history/{key}")
     public ApiResponse<List<SessionHistoryEntry>> getSessionHistory(
             @PathVariable String key,

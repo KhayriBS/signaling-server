@@ -293,6 +293,23 @@ public class SessionService {
                 .toList();
     }
 
+    /**
+     * Vue technicien : toutes les sessions, sans restriction par machine.
+     * Le param `direction` est ignoré ici (il n'a de sens que relativement
+     * à une machine donnée).
+     */
+    public List<SessionHistoryEntry> getAllSessionHistory(String status, String search) {
+        List<SessionStatus> statuses = resolveStatusFilter(status);
+        String normalizedSearch = (search == null) ? null : search.trim();
+        if (normalizedSearch != null && normalizedSearch.isEmpty()) {
+            normalizedSearch = null;
+        }
+        return sessionRepository.findAllForAdmin(statuses, normalizedSearch)
+                .stream()
+                .map(s -> SessionHistoryEntry.fromEntity(s, null))
+                .toList();
+    }
+
     private String normalizeDirection(String direction) {
         if (direction == null) return null;
         String trimmed = direction.trim().toLowerCase();

@@ -62,6 +62,15 @@ public class FileTransferLogController {
      *                "ended" (= COMPLETED+FAILED+CANCELLED) / "all"
      *  - q         : sous-chaîne cherchée dans fileName / fromMachineId / toMachineId
      */
+    /** Historique GLOBAL pour la vue technicien. SecurityConfig → ROLE_ADMIN. */
+    @GetMapping("/history")
+    public ApiResponse<List<FileTransferHistoryEntry>> getAllHistory(
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "q", required = false) String search) {
+
+        return ApiResponse.success(service.getAllHistory(status, search));
+    }
+
     @GetMapping("/history/{key}")
     public ApiResponse<List<FileTransferHistoryEntry>> getHistory(
             @PathVariable String key,

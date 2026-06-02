@@ -49,4 +49,25 @@ public interface ControlSessionRepository extends JpaRepository<ControlSession, 
             @Param("statuses") List<SessionStatus> statuses,
             @Param("search") String search
     );
+
+    /**
+     * Vue admin : toutes les sessions, sans restriction par machine. Mêmes
+     * filtres optionnels que findHistoryForMachine pour cohérence d'UX.
+     */
+    @Query("""
+        SELECT s FROM ControlSession s
+        WHERE
+          (:statuses IS NULL OR s.status IN :statuses)
+          AND (
+            :search IS NULL OR :search = ''
+            OR LOWER(s.agentMachineId)     LIKE LOWER(CONCAT('%', :search, '%'))
+            OR LOWER(s.technicianUsername) LIKE LOWER(CONCAT('%', :search, '%'))
+            OR LOWER(s.signalingToken)     LIKE LOWER(CONCAT('%', :search, '%'))
+          )
+        ORDER BY s.startedAt DESC
+    """)
+    List<ControlSession> findAllForAdmin(
+            @Param("statuses") List<SessionStatus> statuses,
+            @Param("search") String search
+    );
 }

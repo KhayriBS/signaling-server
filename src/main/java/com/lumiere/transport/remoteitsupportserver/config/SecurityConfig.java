@@ -54,6 +54,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/sessions/approval-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/approve-public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/sessions/reject-public/**").permitAll()
+                        // Vue ADMIN globale : doit passer AVANT la règle permitAll
+                        // ci-dessous (sinon /sessions/history serait public).
+                        .requestMatchers(HttpMethod.GET, "/sessions/history").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/file-transfers/history").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/sessions/history/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/file-transfers", "/file-transfers/").permitAll()
                         .requestMatchers(HttpMethod.PATCH, "/file-transfers/**").permitAll()
