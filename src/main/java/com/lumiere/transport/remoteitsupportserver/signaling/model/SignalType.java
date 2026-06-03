@@ -7,7 +7,8 @@ public enum SignalType {
     ICE,          // ICE candidate
     LEAVE,        // quitter session
     CHAT,         // chat message
-    STREAM_STATS, // stream bitrate/fps telemetry
+    STREAM_STATS,  // stream bitrate/fps telemetry
+    STREAM_PROFILE, // viewer pause/resume/quality fallback channel (when DataChannel "input" is not yet open)
     ERROR,
     // File Transfer
     FILE_LIST_REQUEST,   // Request directory listing
