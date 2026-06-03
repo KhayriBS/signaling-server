@@ -40,94 +40,108 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        try {
+            // Allow larger signaling payloads (file transfer chunks)
+            session.setTextMessageSizeLimit(512 * 1024);
 
-        // Allow larger signaling payloads (file transfer chunks)
-        session.setTextMessageSizeLimit(512 * 1024);
+            URI uri = session.getUri();
+            if (uri == null) {
+                session.close(CloseStatus.BAD_DATA);
+                return;
+            }
 
-        URI uri = session.getUri();
-        if (uri == null) {
-            session.close(CloseStatus.BAD_DATA);
-            return;
+            Map<String, String> params = UriComponentsBuilder.fromUri(uri)
+                    .build()
+                    .getQueryParams()
+                    .toSingleValueMap();
+
+            String token = params.get("token");
+            String role = params.get("role");
+
+            if (token == null || role == null) {
+                session.close(CloseStatus.BAD_DATA);
+                return;
+            }
+
+            ControlSession controlSession =
+                    controlSessionRepository.findBySignalingToken(token)
+                            .orElse(null);
+
+            if (controlSession == null ||
+                    controlSession.getStatus() != SessionStatus.ACTIVE) {
+                log.warn("WS rejected: session for token {} not ACTIVE (found={}, status={})",
+                        token,
+                        controlSession != null,
+                        controlSession == null ? "null" : controlSession.getStatus());
+                session.close(CloseStatus.NOT_ACCEPTABLE);
+                return;
+            }
+
+            // 🔐 Vérifier le rôle
+            if (!role.equals("viewer") && !role.equals("agent")) {
+                session.close(CloseStatus.BAD_DATA);
+                return;
+            }
+
+            // 🔐 Optionnel : vérifier machineId côté agent
+            if (role.equals("agent")) {
+                // ici tu peux vérifier machineId envoyé par l’agent
+            }
+
+            signalingService.register(
+                    String.valueOf(controlSession.getId()),
+                    role,
+                    session
+            );
+
+            // Stocker le sessionId dans les attributs de la session WebSocket
+            session.getAttributes().put("sessionId", String.valueOf(controlSession.getId()));
+            session.getAttributes().put("role", role);
+
+            log.info("Signaling WS OPEN session={} role={}", controlSession.getId(), role);
+        } catch (Exception e) {
+            log.error("afterConnectionEstablished FAILED — will close with 1011", e);
+            throw e;
         }
-
-        Map<String, String> params = UriComponentsBuilder.fromUri(uri)
-                .build()
-                .getQueryParams()
-                .toSingleValueMap();
-
-        String token = params.get("token");
-        String role = params.get("role");
-
-        if (token == null || role == null) {
-            session.close(CloseStatus.BAD_DATA);
-            return;
-        }
-
-        ControlSession controlSession =
-                controlSessionRepository.findBySignalingToken(token)
-                        .orElse(null);
-
-        if (controlSession == null ||
-                controlSession.getStatus() != SessionStatus.ACTIVE) {
-            session.close(CloseStatus.NOT_ACCEPTABLE);
-            return;
-        }
-
-        // 🔐 Vérifier le rôle
-        if (!role.equals("viewer") && !role.equals("agent")) {
-            session.close(CloseStatus.BAD_DATA);
-            return;
-        }
-
-        // 🔐 Optionnel : vérifier machineId côté agent
-        if (role.equals("agent")) {
-            // ici tu peux vérifier machineId envoyé par l’agent
-        }
-
-        signalingService.register(
-                String.valueOf(controlSession.getId()),
-                role,
-                session
-        );
-
-        // Stocker le sessionId dans les attributs de la session WebSocket
-        session.getAttributes().put("sessionId", String.valueOf(controlSession.getId()));
-        session.getAttributes().put("role", role);
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-
-        SignalMessage msg = mapper.readValue(message.getPayload(), SignalMessage.class);
-
-        if (msg.getType() == null || msg.getTo() == null) {
-            session.sendMessage(new TextMessage(error("Invalid message: type/to required")));
-            return;
-        }
-
         String sessionId = (String) session.getAttributes().get("sessionId");
-        if (sessionId == null) {
-            session.sendMessage(new TextMessage(error("Missing sessionId")));
-            return;
-        }
-
         String fromRole = (String) session.getAttributes().get("role");
+        try {
+            SignalMessage msg = mapper.readValue(message.getPayload(), SignalMessage.class);
 
-        if (msg.getType() == SignalType.ICE) {
-            String iceLine = extractIceCandidateLine(msg.getPayload());
-            String iceType = parseIceCandidateType(iceLine);
-            log.info("🧊 [ICE relay] session={} {} → {}  type={}  candidate={}",
-                    sessionId, fromRole, msg.getTo(), iceType,
-                    iceLine == null ? "<null>" : truncate(iceLine, 160));
+            if (msg.getType() == null || msg.getTo() == null) {
+                session.sendMessage(new TextMessage(error("Invalid message: type/to required")));
+                return;
+            }
+
+            if (sessionId == null) {
+                session.sendMessage(new TextMessage(error("Missing sessionId")));
+                return;
+            }
+
+            if (msg.getType() == SignalType.ICE) {
+                String iceLine = extractIceCandidateLine(msg.getPayload());
+                String iceType = parseIceCandidateType(iceLine);
+                log.info("🧊 [ICE relay] session={} {} → {}  type={}  candidate={}",
+                        sessionId, fromRole, msg.getTo(), iceType,
+                        iceLine == null ? "<null>" : truncate(iceLine, 160));
+            }
+
+            WebSocketSession peer = signalingService.getPeer(sessionId, msg.getTo());
+            if (peer == null || !peer.isOpen()) {
+                session.sendMessage(new TextMessage(error("Peer not connected: " + msg.getTo())));
+                return;
+            }
+
+            peer.sendMessage(new TextMessage(mapper.writeValueAsString(msg)));
+        } catch (Exception e) {
+            log.error("handleTextMessage FAILED session={} fromRole={} payload(len)={} — will close with 1011",
+                    sessionId, fromRole, message.getPayloadLength(), e);
+            throw e;
         }
-
-        WebSocketSession peer = signalingService.getPeer(sessionId, msg.getTo());
-        if (peer == null || !peer.isOpen()) {
-            session.sendMessage(new TextMessage(error("Peer not connected: " + msg.getTo())));
-            return;
-        }
-
-        peer.sendMessage(new TextMessage(mapper.writeValueAsString(msg)));
     }
 
     private String extractIceCandidateLine(Object payload) {
@@ -188,9 +202,9 @@ public class SignalingWebSocketHandler extends TextWebSocketHandler {
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         String sessionId = (String) session.getAttributes().get("sessionId");
         String role = (String) session.getAttributes().get("role");
+        // Élevé en error temporairement pour diagnostiquer les 1011 inattendus.
+        log.error("Signaling WS transport ERROR session={} role={}", sessionId, role, exception);
         if (sessionId != null) {
-            log.debug("Signaling WS transport error for session {} role {}: {}",
-                    sessionId, role, exception.getMessage());
             signalingService.remove(sessionId, session);
         }
     }
