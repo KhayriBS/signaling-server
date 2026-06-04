@@ -31,6 +31,9 @@ public class Agent {
 
     private String assignedBy;
 
+    @Column(name = "local_ip")
+    private String localIp;
+
     @Column(unique = true, length = 6)
     private String connectionCode;
 

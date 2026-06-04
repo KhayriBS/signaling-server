@@ -8,7 +8,9 @@ import com.lumiere.transport.remoteitsupportserver.agent.service.AgentPresenceSe
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/agents")
@@ -30,8 +32,18 @@ public class AgentController {
     }
     @PostMapping("/login")
     public AgentLoginResponse agentLogin(@RequestParam String machineId,
-                                         @RequestParam String os) {
-        return agentPresenceService.loginAgent(machineId, os);
+                                         @RequestParam String os,
+                                         @RequestParam(required = false) String localIp) {
+        return agentPresenceService.loginAgent(machineId, os, localIp);
+    }
+
+    @GetMapping("/{machineId}/network")
+    public Map<String, String> getNetwork(@PathVariable String machineId) {
+        var agent = agentPresenceService.findByMachineId(machineId)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + machineId));
+        Map<String, String> body = new HashMap<>();
+        body.put("localIp", agent.getLocalIp() != null ? agent.getLocalIp() : "");
+        return body;
     }
 
 

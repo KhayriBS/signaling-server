@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Service
@@ -69,7 +70,7 @@ public class AgentPresenceService {
         }
         return saved;
     }
-    public AgentLoginResponse loginAgent(String machineId, String os) {
+    public AgentLoginResponse loginAgent(String machineId, String os, String localIp) {
         Agent agent = agentRepository.findByMachineId(machineId)
                 .orElseGet(() -> {
                     Agent a = new Agent();
@@ -84,6 +85,9 @@ public class AgentPresenceService {
         agent.setOs(os);
         agent.setStatus(AgentStatus.ONLINE);
         agent.setLastHeartbeat(Instant.now());
+        if (localIp != null && !localIp.isBlank()) {
+            agent.setLocalIp(localIp.trim());
+        }
         ensureConnectionCode(agent);
         Agent saved = agentRepository.save(agent);
         if (wasOffline) {
@@ -109,6 +113,10 @@ public class AgentPresenceService {
                 saved.getAssignedUsername(),
                 saved.getConnectionCode()
         );
+    }
+
+    public Optional<Agent> findByMachineId(String machineId) {
+        return agentRepository.findByMachineId(machineId);
     }
 
     public List<Agent> getAllAgents(Authentication authentication) {
