@@ -62,12 +62,29 @@ public class AiAgentService {
             Your job: output a short, ordered list of atomic UI/shell actions
             that, executed in order, accomplish the instruction.
 
+            AGENTIC LOOP MODE
+            You operate in an iterative loop. After every batch of actions you
+            return, the technician's client EXECUTES them, captures a fresh
+            screenshot, and sends it back to you along with the previous
+            turns' summary. You then decide:
+              • Continue: return more actions, with "done": false.
+              • Stop:     return "done": true and an empty (or short final)
+                           actions list — the loop ends and the technician
+                           sees your final rationale as the answer.
+            The frontend caps the loop at 5 iterations. Use the history field
+            in the request to know what you already did — DO NOT repeat the
+            same action twice in a row if it had no effect.
+
             STRICT OUTPUT FORMAT — return ONLY a single JSON object, no prose,
             no markdown fences, no comments. Shape:
             {
-              "rationale": "<one short sentence (<=120 chars) explaining the plan>",
-              "actions": [ <action>, <action>, ... ]   // 1..32 items
+              "rationale": "<one short sentence (<=120 chars) explaining this turn>",
+              "done":      <true|false>,                // omit = false
+              "actions":   [ <action>, <action>, ... ]  // 0..32 items
             }
+            On the FINAL turn (done=true), "rationale" should be the human-
+            readable answer to the technician's original question (e.g.
+            "The IP is 192.168.1.42" or "Notepad++ is now installed and pinned").
 
             Each <action> is exactly one of:
               { "type": "click",        "x": <0..1>, "y": <0..1>, "button": "left"|"right"|"middle" }
@@ -347,10 +364,11 @@ public class AiAgentService {
         }
 
         if (plan.actions.isEmpty()) {
-            // Modele a refuse — on remonte le rationale sans erreur (status ok mais
-            // pas d'actions). Pour le front c'est un "refus" lisible.
+            // Modele a refuse OU a termine la boucle agentic (done=true sans
+            // actions supplementaires). Dans les deux cas status=ok, le front
+            // distingue via le champ `done`.
             String actionsJson = "[]";
-            return persistOkAndReturn(req, actionsJson, plan.rationale, List.of(), t0);
+            return persistOkAndReturn(req, actionsJson, plan.rationale, List.of(), plan.done, t0);
         }
 
         // OK
@@ -360,7 +378,7 @@ public class AiAgentService {
         } catch (JacksonException e) {
             actionsJson = "[]";
         }
-        return persistOkAndReturn(req, actionsJson, plan.rationale, plan.actions, t0);
+        return persistOkAndReturn(req, actionsJson, plan.rationale, plan.actions, plan.done, t0);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -405,17 +423,47 @@ public class AiAgentService {
         inlineData.put("mimeType", "image/jpeg");
         inlineData.put("data", req.screenshot());
 
+        // Historique des tours precedents (mode agentic). Au tour 0 history=null
+        // ou vide → on n'ajoute rien. Sinon on serialise compact pour rester sous
+        // budget tokens (chaque step ~ 200-400 chars).
+        StringBuilder historyText = new StringBuilder();
+        int iteration = req.iteration() == null ? 0 : req.iteration();
+        if (req.history() != null && !req.history().isEmpty()) {
+            historyText.append("\nPREVIOUS TURNS IN THIS LOOP:\n");
+            for (var step : req.history()) {
+                historyText.append("  [iter=")
+                        .append(step.iteration() == null ? "?" : step.iteration())
+                        .append("] rationale=\"")
+                        .append(truncate(step.rationale(), 150))
+                        .append("\"\n");
+                if (step.actionsJson() != null && !step.actionsJson().isBlank()) {
+                    historyText.append("    actions=").append(truncate(step.actionsJson(), 400)).append("\n");
+                }
+                if (step.resultText() != null && !step.resultText().isBlank()) {
+                    historyText.append("    results=").append(truncate(step.resultText(), 300)).append("\n");
+                }
+            }
+            historyText.append("Use the history above to avoid repeating ineffective actions.\n");
+        }
+
         // Commande textuelle
         String userText = """
                 Technician instruction (French or English):
                 "%s"
 
                 Screenshot resolution: %dx%d px
+                Current loop iteration: %d (max 5 — after that the loop ends).
+                %s
                 Return ONLY the JSON object described in the system prompt.
+                Include the "done" field explicitly. Set done=true ONLY when
+                the technician's instruction is fully accomplished AND the
+                visible state confirms it.
                 """.formatted(
                 req.command().replace("\"", "\\\""),
                 req.frameWidth() == null ? 0 : req.frameWidth(),
-                req.frameHeight() == null ? 0 : req.frameHeight()
+                req.frameHeight() == null ? 0 : req.frameHeight(),
+                iteration,
+                historyText.toString()
         );
         userParts.addObject().put("text", userText);
 
@@ -441,7 +489,7 @@ public class AiAgentService {
         return parts.get(0).path("text").asText("");
     }
 
-    private record ParsedPlan(String rationale, List<AiAction> actions) {}
+    private record ParsedPlan(String rationale, List<AiAction> actions, boolean done) {}
 
     private ParsedPlan parsePlan(String rawJson) {
         if (rawJson == null || rawJson.isBlank()) {
@@ -451,6 +499,8 @@ public class AiAgentService {
         JsonNode root = objectMapper.readTree(cleaned);
 
         String rationale = root.path("rationale").asString(null);
+        // `done` peut etre absent (vieux prompt, mono-shot) → false par defaut.
+        boolean done = root.path("done").asBoolean(false);
         JsonNode actionsNode = root.path("actions");
         List<AiAction> actions = new ArrayList<>();
         if (actionsNode.isArray()) {
@@ -461,7 +511,7 @@ public class AiAgentService {
                 if (a != null) actions.add(a);
             }
         }
-        return new ParsedPlan(rationale, actions);
+        return new ParsedPlan(rationale, actions, done);
     }
 
 
@@ -662,7 +712,8 @@ public class AiAgentService {
     }
 
     private AiActionEnvelope persistOkAndReturn(AiFrameRequest req, String actionsJson,
-                                                String rationale, List<AiAction> actions, long t0) {
+                                                String rationale, List<AiAction> actions,
+                                                boolean done, long t0) {
         try {
             AiSession row = new AiSession();
             row.setSessionId(safe(req.sessionId(), 64));
@@ -675,7 +726,8 @@ public class AiAgentService {
         } catch (Exception ex) {
             log.warn("Failed to persist ai_sessions row (ok): {}", ex.getMessage());
         }
-        return AiActionEnvelope.ok(req.sessionId(), req.command(), rationale, actions);
+        return AiActionEnvelope.ok(req.sessionId(), req.command(), rationale, actions, done,
+                req.iteration());
     }
 
     private static String safe(String s, int max) {
