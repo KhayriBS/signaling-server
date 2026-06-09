@@ -26,20 +26,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Service IA — orchestre l'appel a Gemini 2.5 Flash en mode vision et persiste
- * chaque round-trip dans {@code ai_sessions} pour audit.
+ * Service IA — orchestre l'appel a Groq (Llama 4 Scout en mode vision) 
  *
  * Pipeline :
- *   1. Build payload Gemini (system prompt + image inline_data base64 + commande).
- *   2. POST sur {@code generativelanguage.googleapis.com/.../generateContent}.
- *   3. Extract le premier candidate.parts[0].text — c'est du JSON pur (on a force
- *      {@code response_mime_type: application/json} dans la config).
+ *   1. Build payload OpenAI-style (messages: system + user multimodal avec image).
+ *   2. POST sur {@code api.groq.com/openai/v1/chat/completions}.
+ *   3. Extract {@code choices[0].message.content} — c'est du JSON pur (on a
+ *      force {@code response_format.type=json_object}).
  *   4. Parse / valide / clamp les coordonnees, retourne l'envelope.
  *
  * Gestion d'erreur :
- *   - timeout HTTP        → status="error", message lisible
- *   - HTTP 4xx/5xx Gemini → status="error" + extrait du body
- *   - JSON malforme       → status="error"
+ *   - timeout HTTP     → status="error", message lisible
+ *   - HTTP 4xx/5xx Groq → status="error" + extrait du body
+ *   - JSON malforme    → status="error"
  *   - tout est loggue en DB (ok ou error) avec latence + extrait commande
  */
 @Service
@@ -47,14 +46,11 @@ public class AiAgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AiAgentService.class);
 
-    private static final String GEMINI_BASE_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models";
-    private static final String GEMINI_MODEL = "gemini-2.5-flash";
+    private static final String GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
     private static final Duration HTTP_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration HTTP_READ_TIMEOUT = Duration.ofSeconds(25);
     private static final int MAX_ACTIONS = 32;
-// Le system prompt est la piece centrale de ce service : il explique en detail a
     private static final String SYSTEM_PROMPT = """
             You are an OS automation agent embedded in a remote-support tool.
             You receive (1) a JPEG screenshot of a Windows desktop and (2) a
@@ -234,35 +230,36 @@ public class AiAgentService {
     private final RestClient httpClient;
     private final ObjectMapper objectMapper;
     private final AiSessionRepository aiSessionRepository;
-    private final String geminiApiKey;
+    private final String groqApiKey;
+    private final String groqModel;
 
     public AiAgentService(ObjectMapper objectMapper,
                           AiSessionRepository aiSessionRepository,
-                          @Value("${gemini.api.key:}") String geminiApiKey) {
+                          @Value("${groq.api.key:}") String groqApiKey,
+                          @Value("${groq.model:meta-llama/llama-4-scout-17b-16e-instruct}") String groqModel) {
         this.objectMapper = objectMapper;
         this.aiSessionRepository = aiSessionRepository;
-        this.geminiApiKey = geminiApiKey == null ? "" : geminiApiKey.trim();
+        this.groqApiKey = groqApiKey == null ? "" : groqApiKey.trim();
+        this.groqModel = groqModel == null || groqModel.isBlank()
+                ? "meta-llama/llama-4-scout-17b-16e-instruct"
+                : groqModel.trim();
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout((int) HTTP_CONNECT_TIMEOUT.toMillis());
         factory.setReadTimeout((int) HTTP_READ_TIMEOUT.toMillis());
 
         this.httpClient = RestClient.builder()
-                .baseUrl(GEMINI_BASE_URL)
+                .baseUrl(GROQ_BASE_URL)
                 .requestFactory(factory)
                 .build();
 
-        log.info("[ai-service] initialised — model={}, httpConnect={}s, httpRead={}s, apiKey={}",
-                GEMINI_MODEL,
+        log.info("[ai-service] initialised — provider=Groq, model={}, httpConnect={}s, httpRead={}s, apiKey={}",
+                this.groqModel,
                 HTTP_CONNECT_TIMEOUT.toSeconds(),
                 HTTP_READ_TIMEOUT.toSeconds(),
-                this.geminiApiKey.isEmpty() ? "MISSING" : "set");
+                this.groqApiKey.isEmpty() ? "MISSING" : "set");
     }
 
-    /**
-     * Point d'entree synchrone — appele depuis le @MessageMapping STOMP.
-     * Renvoie toujours une envelope (jamais null) et persiste systematiquement
-     * une ligne dans ai_sessions, meme en erreur.
-     */
+
     public AiActionEnvelope analyse(AiFrameRequest req) {
         long t0 = System.currentTimeMillis();
 
@@ -272,42 +269,40 @@ public class AiAgentService {
             return persistAndReturn(req, null, "error", validationError, t0);
         }
 
-        if (geminiApiKey.isEmpty()) {
+        if (groqApiKey.isEmpty()) {
             return persistAndReturn(req, null, "error",
-                    "Gemini API key not configured (gemini.api.key)", t0);
+                    "Groq API key not configured (groq.api.key)", t0);
         }
 
         String body;
         try {
-            body = buildGeminiPayload(req);
+            body = buildGroqPayload(req);
         } catch (Exception ex) {
             return persistAndReturn(req, null, "error",
-                    "Failed to build Gemini payload: " + ex.getMessage(), t0);
+                    "Failed to build Groq payload: " + ex.getMessage(), t0);
         }
 
         String rawResponseText = null;
         String lastError = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
             long tHttpStart = System.currentTimeMillis();
-            log.info("[ai-service] → POST Gemini (attempt {}, screenshot ~{} KB)",
-                    attempt, req.screenshot().length() / 1024);
+            log.info("[ai-service] → POST Groq (attempt {}, model={}, screenshot ~{} KB)",
+                    attempt, groqModel, req.screenshot().length() / 1024);
             try {
                 String response = httpClient.post()
-                        .uri(uriBuilder -> uriBuilder
-                                .path("/{model}:generateContent")
-                                .queryParam("key", geminiApiKey)
-                                .build(GEMINI_MODEL))
+                        .uri("/chat/completions")
                         .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + groqApiKey)
                         .body(body)
                         .retrieve()
                         .body(String.class);
                 if (response == null) {
-                    lastError = "Empty response from Gemini";
+                    lastError = "Empty response from Groq";
                     break;
                 }
                 rawResponseText = extractText(response);
                 lastError = null;
-                log.info("[ai-service] ◀ Gemini OK in {} ms (response {} chars, parsed text {} chars)",
+                log.info("[ai-service] ◀ Groq OK in {} ms (response {} chars, parsed text {} chars)",
                         System.currentTimeMillis() - tHttpStart,
                         response.length(),
                         rawResponseText == null ? 0 : rawResponseText.length());
@@ -317,13 +312,10 @@ public class AiAgentService {
                 String bodyExcerpt = truncate(ex.getResponseBodyAsString(), 400);
 
                 if (code == 429 && attempt == 1) {
-                    // Rate-limit transitoire — extrait le retry-after suggere par
-                    // l'API si present, sinon fallback 4s.
-                    long backoffMs = parseGeminiRetryDelayMs(ex.getResponseBodyAsString())
-                            .orElse(4_000L);
-                    backoffMs = Math.min(backoffMs, 8_000L); // cap a 8s, on ne veut pas
-                                                              // bloquer le pool indefiniment
-                    log.info("Gemini 429 received, retrying after {}ms (attempt {})", backoffMs, attempt);
+                   
+                    long backoffMs = parseGroqRetryDelayMs(ex).orElse(4_000L);
+                    backoffMs = Math.min(backoffMs, 8_000L); // cap a 8s
+                    log.info("Groq 429 received, retrying after {}ms (attempt {})", backoffMs, attempt);
                     try {
                         Thread.sleep(backoffMs);
                     } catch (InterruptedException ie) {
@@ -335,14 +327,14 @@ public class AiAgentService {
                 }
 
                 lastError = formatHttpError(code, bodyExcerpt);
-                log.warn("Gemini HTTP {} (attempt {}): {}", code, attempt, bodyExcerpt);
+                log.warn("Groq HTTP {} (attempt {}): {}", code, attempt, bodyExcerpt);
                 break;
             } catch (ResourceAccessException ex) {
-                log.warn("Gemini timeout / network error: {}", ex.getMessage());
-                lastError = "Gemini timeout/network: " + ex.getMessage();
+                log.warn("Groq timeout / network error: {}", ex.getMessage());
+                lastError = "Groq timeout/network: " + ex.getMessage();
                 break;
             } catch (Exception ex) {
-                log.warn("Unexpected error during Gemini call", ex);
+                log.warn("Unexpected error during Groq call", ex);
                 lastError = "Unexpected: " + ex.getClass().getSimpleName() + " — " + ex.getMessage();
                 break;
             }
@@ -350,23 +342,21 @@ public class AiAgentService {
 
         if (rawResponseText == null) {
             return persistAndReturn(req, null, "error",
-                    lastError == null ? "Unknown Gemini error" : lastError, t0);
+                    lastError == null ? "Unknown Groq error" : lastError, t0);
         }
 
-        // Parse JSON de Gemini
+        // Parse JSON renvoye par Groq dans message.content
         ParsedPlan plan;
         try {
             plan = parsePlan(rawResponseText);
         } catch (Exception ex) {
-            log.warn("Failed to parse Gemini JSON. Raw text: {}", truncate(rawResponseText, 500));
+            log.warn("Failed to parse Groq JSON. Raw text: {}", truncate(rawResponseText, 500));
             return persistAndReturn(req, null, "error",
-                    "Invalid JSON from Gemini: " + ex.getMessage(), t0);
+                    "Invalid JSON from Groq: " + ex.getMessage(), t0);
         }
 
         if (plan.actions.isEmpty()) {
-            // Modele a refuse OU a termine la boucle agentic (done=true sans
-            // actions supplementaires). Dans les deux cas status=ok, le front
-            // distingue via le champ `done`.
+
             String actionsJson = "[]";
             return persistOkAndReturn(req, actionsJson, plan.rationale, List.of(), plan.done, t0);
         }
@@ -395,33 +385,20 @@ public class AiAgentService {
         return null;
     }
 
-    private String buildGeminiPayload(AiFrameRequest req) {
+    private String buildGroqPayload(AiFrameRequest req) {
         ObjectNode root = objectMapper.createObjectNode();
 
-        // generation_config : on FORCE le mime-type JSON pour eviter les markdown fences.
-        ObjectNode genConfig = root.putObject("generationConfig");
-        genConfig.put("temperature", 0.2);
-        genConfig.put("topK", 32);
-        genConfig.put("topP", 0.9);
-        genConfig.put("maxOutputTokens", 2048);
-        genConfig.put("responseMimeType", "application/json");
+        // Modele + parametres de generation. Groq accepte les memes parametres
+        // que l'API OpenAI Chat Completions.
+        root.put("model", groqModel);
+        root.put("temperature", 0.2);
+        root.put("top_p", 0.9);
+        root.put("max_tokens", 2048);
 
-        // system_instruction
-        ObjectNode sysInstr = root.putObject("systemInstruction");
-        ArrayNode sysParts = sysInstr.putArray("parts");
-        sysParts.addObject().put("text", SYSTEM_PROMPT);
-
-        // contents
-        ArrayNode contents = root.putArray("contents");
-        ObjectNode userTurn = contents.addObject();
-        userTurn.put("role", "user");
-        ArrayNode userParts = userTurn.putArray("parts");
-
-        // Image inline
-        ObjectNode imagePart = userParts.addObject();
-        ObjectNode inlineData = imagePart.putObject("inlineData");
-        inlineData.put("mimeType", "image/jpeg");
-        inlineData.put("data", req.screenshot());
+        // JSON mode : Groq supporte response_format={"type":"json_object"}
+        // pour Llama 4 Scout/Maverick. Force une sortie JSON sans markdown.
+        ObjectNode responseFormat = root.putObject("response_format");
+        responseFormat.put("type", "json_object");
 
         // Historique des tours precedents (mode agentic). Au tour 0 history=null
         // ou vide → on n'ajoute rien. Sinon on serialise compact pour rester sous
@@ -446,7 +423,8 @@ public class AiAgentService {
             historyText.append("Use the history above to avoid repeating ineffective actions.\n");
         }
 
-        // Commande textuelle
+        // Commande textuelle (insertion JSON-safe dans le system prompt sera
+        // assuree par Jackson via .put("text", userText)).
         String userText = """
                 Technician instruction (French or English):
                 "%s"
@@ -465,28 +443,60 @@ public class AiAgentService {
                 iteration,
                 historyText.toString()
         );
-        userParts.addObject().put("text", userText);
+
+        // Messages OpenAI-style : system + user (multimodal text + image_url).
+        ArrayNode messages = root.putArray("messages");
+
+        // System prompt
+        ObjectNode sysMsg = messages.addObject();
+        sysMsg.put("role", "system");
+        sysMsg.put("content", SYSTEM_PROMPT);
+
+        // User turn : tableau de parts {type:"text"} + {type:"image_url"}
+        ObjectNode userMsg = messages.addObject();
+        userMsg.put("role", "user");
+        ArrayNode userParts = userMsg.putArray("content");
+
+        // 1. partie texte
+        ObjectNode textPart = userParts.addObject();
+        textPart.put("type", "text");
+        textPart.put("text", userText);
+
+        // 2. partie image — Groq accepte les data URLs base64 directement.
+        ObjectNode imagePart = userParts.addObject();
+        imagePart.put("type", "image_url");
+        ObjectNode imageUrl = imagePart.putObject("image_url");
+        imageUrl.put("url", "data:image/jpeg;base64," + req.screenshot());
 
         return objectMapper.writeValueAsString(root);
     }
 
     private String extractText(String responseBody) {
         JsonNode root = objectMapper.readTree(responseBody);
-        JsonNode candidates = root.path("candidates");
-        if (!candidates.isArray() || candidates.isEmpty()) {
-            // Gemini renvoie souvent {"promptFeedback":{"blockReason":"..."}}
-            JsonNode feedback = root.path("promptFeedback");
-            if (!feedback.isMissingNode()) {
-                throw new IllegalStateException("Gemini refused: " + feedback.toString());
+        JsonNode choices = root.path("choices");
+        if (!choices.isArray() || choices.isEmpty()) {
+            // Groq renvoie {"error": {"message":"...","type":"..."}} sur refus
+            // model-level (rare, surtout filtres safety).
+            JsonNode error = root.path("error");
+            if (!error.isMissingNode()) {
+                String msg = error.path("message").asText("");
+                throw new IllegalStateException("Groq refused: " + msg);
             }
-            throw new IllegalStateException("No candidates in Gemini response: "
+            throw new IllegalStateException("No choices in Groq response: "
                     + truncate(responseBody, 300));
         }
-        JsonNode parts = candidates.get(0).path("content").path("parts");
-        if (!parts.isArray() || parts.isEmpty()) {
-            throw new IllegalStateException("No parts in Gemini candidate");
+        JsonNode message = choices.get(0).path("message");
+        if (message.isMissingNode()) {
+            throw new IllegalStateException("No message in Groq choice");
         }
-        return parts.get(0).path("text").asText("");
+        // finish_reason="length" indique que max_tokens a ete atteint —
+        // le JSON est potentiellement tronque. On warn mais on tente le
+        // parse, des fois ca passe (le JSON-mode tend a finir proprement).
+        String finishReason = choices.get(0).path("finish_reason").asText("");
+        if ("length".equals(finishReason)) {
+            log.warn("Groq finish_reason=length, response may be truncated");
+        }
+        return message.path("content").asText("");
     }
 
     private record ParsedPlan(String rationale, List<AiAction> actions, boolean done) {}
@@ -647,41 +657,63 @@ public class AiAgentService {
   
     private static String formatHttpError(int code, String bodyExcerpt) {
         if (code == 429) {
-            // Cas le plus frequent en free-tier : "Quota IA depasse, attends ~30s."
-            return "Quota IA depasse (HTTP 429). Free-tier Gemini = ~10 req/min. "
-                    + "Attends 30-60s et reessaie, ou passe en tier paye.";
+            // Cas le plus frequent : free-tier Groq = ~30 req/min sur Llama 4 Scout.
+            return "Quota IA depasse (HTTP 429). Free-tier Groq = ~30 req/min sur Llama 4. "
+                    + "Attends 30-60s et reessaie, ou passe sur un autre modele moins charge.";
         }
         if (code == 401 || code == 403) {
-            return "Cle Gemini invalide ou desactivee (HTTP " + code + "). Verifie gemini.api.key dans application.properties.";
+            return "Cle Groq invalide ou desactivee (HTTP " + code + "). Verifie groq.api.key dans application.properties.";
         }
         if (code == 400) {
             return "Requete IA mal formee (HTTP 400) : " + bodyExcerpt;
         }
         if (code >= 500) {
-            return "Gemini indisponible (HTTP " + code + "). Reessaie dans quelques secondes.";
+            return "Groq indisponible (HTTP " + code + "). Reessaie dans quelques secondes.";
         }
         HttpStatus status = HttpStatus.resolve(code);
-        return "Gemini HTTP " + code
+        return "Groq HTTP " + code
                 + (status != null ? " (" + status.getReasonPhrase() + ")" : "")
                 + ": " + bodyExcerpt;
     }
 
 
-    private java.util.Optional<Long> parseGeminiRetryDelayMs(String body) {
-        if (body == null || body.isBlank()) return java.util.Optional.empty();
+    /**
+     * Extrait le delai de retry Groq
+     */
+    private java.util.Optional<Long> parseGroqRetryDelayMs(HttpStatusCodeException ex) {
+        // 1. Header retry-after
         try {
-            JsonNode root = objectMapper.readTree(body);
-            JsonNode details = root.path("error").path("details");
-            if (!details.isArray()) return java.util.Optional.empty();
-            for (JsonNode d : details) {
-                String delay = d.path("retryDelay").asString("");
-                if (!delay.isBlank()) {
-                    // Format "30s" / "1.5s" — on extrait les chiffres + .
-                    String num = delay.replaceAll("[^0-9.]", "");
+            var headers = ex.getResponseHeaders();
+            if (headers != null) {
+                String retryAfter = headers.getFirst("retry-after");
+                if (retryAfter == null) retryAfter = headers.getFirst("Retry-After");
+                if (retryAfter != null && !retryAfter.isBlank()) {
+                    // Groq renvoie un nombre de secondes (peut etre decimal).
+                    String num = retryAfter.replaceAll("[^0-9.]", "");
                     if (!num.isBlank()) {
                         double seconds = Double.parseDouble(num);
                         return java.util.Optional.of((long) (seconds * 1000));
                     }
+                }
+            }
+        } catch (Exception ignored) {
+            // best-effort
+        }
+
+        // 2. Body JSON — chercher pattern "try again in Xs" dans error.message
+        String body = ex.getResponseBodyAsString();
+        if (body == null || body.isBlank()) return java.util.Optional.empty();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            String message = root.path("error").path("message").asText("");
+            if (!message.isBlank()) {
+                // Regex pour "try again in 1.234s" ou "in 30 seconds"
+                var matcher = java.util.regex.Pattern
+                        .compile("(?:in|after)\\s+([0-9]+(?:\\.[0-9]+)?)\\s*(s|sec|second)")
+                        .matcher(message.toLowerCase());
+                if (matcher.find()) {
+                    double seconds = Double.parseDouble(matcher.group(1));
+                    return java.util.Optional.of((long) (seconds * 1000));
                 }
             }
         } catch (Exception ignored) {
@@ -738,8 +770,9 @@ public class AiAgentService {
     // Reserve pour les tests / accees direct si besoin
     public Map<String, Object> debugInfo() {
         return Map.of(
-                "model", GEMINI_MODEL,
-                "apiKeyConfigured", !geminiApiKey.isEmpty(),
+                "provider", "Groq",
+                "model", groqModel,
+                "apiKeyConfigured", !groqApiKey.isEmpty(),
                 "httpConnectTimeoutSeconds", HTTP_CONNECT_TIMEOUT.toSeconds(),
                 "httpReadTimeoutSeconds", HTTP_READ_TIMEOUT.toSeconds()
         );
