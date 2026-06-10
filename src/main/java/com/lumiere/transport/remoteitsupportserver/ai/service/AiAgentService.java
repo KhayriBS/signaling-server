@@ -52,6 +52,24 @@ public class AiAgentService {
     private static final Duration HTTP_READ_TIMEOUT = Duration.ofSeconds(25);
     private static final int MAX_ACTIONS = 32;
     private static final String SYSTEM_PROMPT = """
+            ╔═══════════════════════════════════════════════════════════════════╗
+            ║ CRITICAL CONTEXT — READ THIS FIRST, NEVER FORGET                  ║
+            ╠═══════════════════════════════════════════════════════════════════╣
+            ║ You control a REMOTE Windows machine through a screen-sharing     ║
+            ║ agent. The screenshot you receive IS the target desktop — you     ║
+            ║ are ALREADY CONNECTED and IN CONTROL of that machine.             ║
+            ║                                                                   ║
+            ║ You do NOT need to "exit", "close", "disconnect", or "escape"     ║
+            ║ any remote desktop UI. If you see a Windows taskbar, icons, an    ║
+            ║ open browser, a file explorer — that IS the remote machine's      ║
+            ║ desktop. Just act on it.                                          ║
+            ║                                                                   ║
+            ║ The "Lumiere Agent" / "Bureau a Distance" window you might see    ║
+            ║ in the screenshot is the agent SOFTWARE running on the remote     ║
+            ║ machine — it is NOT something you need to close. Ignore it and    ║
+            ║ act on the rest of the desktop (taskbar, Start menu, etc.).       ║
+            ╚═══════════════════════════════════════════════════════════════════╝
+
             You are an OS automation agent embedded in a remote-support tool.
             You receive (1) a JPEG screenshot of a Windows desktop and (2) a
             natural-language instruction from a human IT technician.
@@ -167,9 +185,11 @@ public class AiAgentService {
                 Snap to left half:  key "ArrowLeft" with modifiers ["meta"].
                 Snap to right half: key "ArrowRight" with modifiers ["meta"].
 
-              Take a screenshot to the user's clipboard:
-                key "PrintScreen" — OR Snipping Tool via Win+Shift+S:
-                key "s" with modifiers ["meta", "shift"].
+              Take a screenshot / Snipping Tool:
+                key "s" with modifiers ["meta", "shift"]   ← Win+Shift+S (always works)
+                ❌ NEVER use key "PrintScreen" — this agent does not support it.
+                If you need a screenshot for YOUR OWN verification (not for the
+                user's clipboard), use the "screenshot" action instead.
 
               Scroll a long page / list:
                 action "scroll" with dy=5 (down) or dy=-5 (up). Repeat as needed.
@@ -380,6 +400,20 @@ public class AiAgentService {
             log.warn("Failed to parse Groq JSON. Raw text: {}", truncate(rawResponseText, 500));
             return persistAndReturn(req, null, "error",
                     "Invalid JSON from Groq: " + ex.getMessage(), t0);
+        }
+
+        // Detection boucle infinie : si la rationale du tour courant est ~equivalente
+        // a celle du tour precedent (40 premiers caracteres alphanum identiques),
+        // le modele tourne en rond — on force done=true avec un message clair pour
+        // ne pas gaspiller les 5 tours.
+        if (isRepeatingPreviousRationale(req, plan.rationale)) {
+            log.warn("[ai-service] Loop detected — same rationale 2 turns in a row: \"{}\"",
+                    truncate(plan.rationale, 100));
+            return persistOkAndReturn(req, "[]",
+                    "Je tourne en rond sur la même étape. Reformule la commande plus précisément "
+                            + "ou vérifie que l'agent distant a bien les droits nécessaires "
+                            + "(droits admin, focus fenêtre, élément réellement visible).",
+                    List.of(), true, t0);
         }
 
         if (plan.actions.isEmpty()) {
@@ -792,6 +826,29 @@ public class AiAgentService {
     private static String safe(String s, int max) {
         if (s == null) return null;
         return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    /**
+     * Detection boucle : compare la rationale courante a la derniere
+     * du history. Normalisation = lowercase + alphanum only, comparaison
+     * sur les 40 premiers caracteres. Tolere les petites variations
+     * stylistiques (ponctuation, accents) mais detecte les vraies
+     * boucles ("we are still on remote desktop screen…" repete x3).
+     */
+    private static boolean isRepeatingPreviousRationale(AiFrameRequest req, String currentRationale) {
+        if (req == null || req.history() == null || req.history().isEmpty()) return false;
+        if (currentRationale == null) return false;
+        var lastStep = req.history().get(req.history().size() - 1);
+        if (lastStep.rationale() == null) return false;
+        String a = normaliseRationale(currentRationale);
+        String b = normaliseRationale(lastStep.rationale());
+        if (a.isEmpty() || b.isEmpty()) return false;
+        int len = Math.min(40, Math.min(a.length(), b.length()));
+        return a.substring(0, len).equals(b.substring(0, len));
+    }
+
+    private static String normaliseRationale(String s) {
+        return s.toLowerCase().replaceAll("[^a-z0-9]", "");
     }
 
     // Reserve pour les tests / accees direct si besoin
