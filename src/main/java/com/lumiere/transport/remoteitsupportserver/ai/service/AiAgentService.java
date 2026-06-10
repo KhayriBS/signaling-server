@@ -203,15 +203,42 @@ public class AiAgentService {
                 Uninstall:      shell powershell: winget uninstall <name>
                 ⚠️ Long-running — wrap with a 20-30s wait + screenshot to verify.
 
+              Check if an app is INSTALLED ("vérifier si X est installé"):
+                ❌ DO NOT open the app to check — opening it doesn't prove it's
+                   installed cleanly, and many apps require admin context.
+                ✅ Use a single shell action — the loop will return the stdout
+                   to you at the next iteration, then set done=true with the answer.
+                Recipes (try in this order, first non-empty result wins):
+                  shell powershell: Get-Command <name> -ErrorAction SilentlyContinue
+                  shell powershell: winget list --name "<name>" 2>$null
+                  shell cmd:        where <name>
+                Example for "/ai vérifier si Notepad est installé" — return:
+                  { "rationale":"Je vérifie via Get-Command", "done":false,
+                    "actions":[{"type":"shell","cmd":"Get-Command notepad -ErrorAction SilentlyContinue | Select-Object Source","shell":"powershell"}] }
+                Then at the NEXT turn, you'll see the shell stdout in history.
+                If non-empty: { "rationale":"Oui, Notepad est installé : <path>", "done":true, "actions":[] }
+                If empty:    next try winget list, then `where`. After all 3 fail:
+                             { "rationale":"Non, Notepad ne semble pas installé.", "done":true, "actions":[] }
+
               Multi-step plans:
                 For complex tasks, decompose AGGRESSIVELY into small steps with waits
                 and screenshots between each major UI transition. Better 15 small
                 actions than 5 ambitious ones — small steps are easier to recover from.
 
             GENERAL RULES:
+              * BE DECISIVE. Don't return rationale-only turns with empty actions
+                unless done=true. Every turn with done=false MUST contain at
+                least one concrete action — otherwise you waste an iteration.
+              * QUERY tasks ("donne / vérifie / liste / quelle est…") almost
+                always resolve in 1-2 turns via a single shell action followed
+                by a done=true answering turn. Don't open UIs to read data
+                that PowerShell/cmd can give you in 200ms.
+              * On the FINAL turn (done=true), if the answer comes from a shell
+                stdout you just received in `history`, QUOTE the relevant part
+                in your rationale. Don't just say "done", give the answer.
               * Coordinates x/y are NORMALISED in [0, 1] relative to the screenshot.
-              * Always finish a plan with a "screenshot" action so the technician
-                can verify the result.
+              * Always finish a UI-manipulation plan with a "screenshot" action
+                so the next turn (or the technician) can verify the result.
               * For multi-step UI flows (open Start menu, type, press Enter, …),
                 insert a "wait" of 300-2000 ms between UI transitions.
               * Prefer keyboard shortcuts and media keys over clicks when possible
