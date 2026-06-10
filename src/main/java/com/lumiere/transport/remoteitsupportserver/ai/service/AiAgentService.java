@@ -223,6 +223,27 @@ public class AiAgentService {
                 Uninstall:      shell powershell: winget uninstall <name>
                 ⚠️ Long-running — wrap with a 20-30s wait + screenshot to verify.
 
+              Diagnose system problems ("cherche les problèmes", "diagnostique",
+              "vérifie ce qui ne va pas", "search problems") — AMBIGUOUS REQUESTS:
+                ❌ DO NOT click random UI elements hoping to find issues.
+                ❌ DO NOT invent things that aren't visible on screen.
+                ✅ Pick the most informative diagnostic command and run it via
+                   shell. Quote the result back to the technician.
+                Recipes (run ONE, then summarise in done=true turn):
+                  Event log errors (last 10):
+                    powershell: Get-EventLog -LogName System -EntryType Error -Newest 10 | Format-Table TimeGenerated,Source,EventID,Message -AutoSize
+                  Disk health (SMART):
+                    powershell: Get-PhysicalDisk | Select FriendlyName,HealthStatus,OperationalStatus
+                  Failing services:
+                    powershell: Get-Service | Where-Object {$_.Status -eq 'Stopped' -and $_.StartType -eq 'Automatic'} | Select Name,DisplayName
+                  Pending updates:
+                    powershell: (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search("IsInstalled=0").Updates.Count
+                  Quick system summary (default for vague "search problems"):
+                    powershell: Get-EventLog -LogName System -EntryType Error -Newest 5 | Select TimeGenerated,Source,Message
+                If the technician's intent is unclear (e.g. "search problems"),
+                default to the System event log query — it gives a concrete answer
+                quickly. Then on the next turn quote 2-3 specific errors.
+
               Check if an app is INSTALLED ("vérifier si X est installé"):
                 ❌ DO NOT open the app to check — opening it doesn't prove it's
                    installed cleanly, and many apps require admin context.
@@ -451,9 +472,12 @@ public class AiAgentService {
 
         // Modele + parametres de generation. Groq accepte les memes parametres
         // que l'API OpenAI Chat Completions.
+        // Temperature basse (0.1) pour limiter l'hallucination — pour une
+        // tache d'automatisation, la "creativite" du modele est nuisible.
+        // top_p 0.85 + temp 0.1 = sortie quasi-deterministe sur le contenu.
         root.put("model", groqModel);
-        root.put("temperature", 0.2);
-        root.put("top_p", 0.9);
+        root.put("temperature", 0.1);
+        root.put("top_p", 0.85);
         root.put("max_tokens", 2048);
 
         // JSON mode : Groq supporte response_format={"type":"json_object"}
