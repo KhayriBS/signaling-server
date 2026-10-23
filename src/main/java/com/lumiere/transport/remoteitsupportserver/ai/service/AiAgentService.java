@@ -304,12 +304,12 @@ public class AiAgentService {
     public AiAgentService(ObjectMapper objectMapper,
                           AiSessionRepository aiSessionRepository,
                           @Value("${groq.api.key:}") String groqApiKey,
-                          @Value("${groq.model:meta-llama/llama-4-scout-17b-16e-instruct}") String groqModel) {
+                  @Value("${groq.model:qwen/qwen3.8-27b}") String groqModel) {
         this.objectMapper = objectMapper;
         this.aiSessionRepository = aiSessionRepository;
         this.groqApiKey = groqApiKey == null ? "" : groqApiKey.trim();
         this.groqModel = groqModel == null || groqModel.isBlank()
-                ? "meta-llama/llama-4-scout-17b-16e-instruct"
+            ? "qwen/qwen3.8-27b"
                 : groqModel.trim();
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout((int) HTTP_CONNECT_TIMEOUT.toMillis());
